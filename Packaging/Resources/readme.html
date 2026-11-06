@@ -1,0 +1,7 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><style>body{font:13px -apple-system,sans-serif;padding:12px;color:#242424}h2{font-size:18px}p,li{line-height:1.65}li{margin:7px 0}</style>
+<h2>安装内容</h2><p>应用为必选。后台服务默认勾选，需要管理员授权，可取消勾选，仅使用监测界面。取消勾选不会移除已安装的后台。</p>
+<p>后台以 root 运行，路径为 /Library/PrivilegedHelperTools/io.cellmori.helper。启动配置位于 /Library/LaunchDaemons/io.cellmori.helper.plist。</p>
+<h2>macOS 26 兼容性</h2><ul><li>普通与固件限充接口自动探测，写入必须回读验证。</li><li>部分新固件会拒绝第三方充电控制；允许安装不代表所有功能均可用。</li><li>提供兼容性报告及实验性适配器兼容模式。兼容模式必须在应用中手动确认启用，不会随安装启用；仅清醒且开盖时有效，会造成电量往返变化。</li><li>macOS 26.4 起提供系统原生 80%–100% 限充，应用提供设置入口，不调用私有原生限充 API。</li></ul>
+<h2>验证范围</h2><p>当前已在 M1 / macOS 15.8.2 验证固件限充和恢复。macOS 26、适配器兼容模式、完整校准尚未实机验收。校准不能修复化学损耗。</p>
+<h2>本地开发签名</h2><p>应用使用本地 ad-hoc 签名，本安装包尚未使用 Developer ID Installer 签名，也未公证。它是开发测试安装包。无需关闭 SIP。</p>
+<p>安装前请退出正在运行的 Cellmori。安装不会自动启动主动放电、校准、实验兼容模式或登录启动。</p></html>

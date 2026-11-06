@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+  <title>Cellmori 电池管家</title>
+  <product id="io.cellmori.app" version="@VERSION@"/>
+  <options customize="always" require-scripts="true" rootVolumeOnly="true" hostArchitectures="arm64"/>
+  <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
+  <welcome file="welcome.html" mime-type="text/html"/>
+  <readme file="readme.html" mime-type="text/html"/>
+  <conclusion file="conclusion.html" mime-type="text/html"/>
+  <volume-check script="checkVolume()">
+    <allowed-os-versions><os-version min="15.0" before="16.0"/><os-version min="26.0" before="27.0"/></allowed-os-versions>
+  </volume-check>
+  <script><![CDATA[
+    function checkVolume() {
+      if (my.target.mountpoint != "/") {
+        my.result.type = "Fatal";
+        my.result.message = "请安装到当前启动磁盘。后台服务需要在当前系统注册。";
+        return false;
+      }
+      return true;
+    }
+  ]]></script>
+  <choices-outline><line choice="app"/><line choice="backend"/></choices-outline>
+  <choice id="app" title="Cellmori 应用（必选）" description="安装到 /Applications/Cellmori.app。提供菜单栏、健康监测、充电面板与兼容性诊断。" start_selected="true" start_enabled="false">
+    <pkg-ref id="io.cellmori.installer.app"/>
+  </choice>
+  <choice id="backend" title="电源管理后台服务（推荐）" description="安装 root 服务 io.cellmori.helper，启用限充与充放电管理。可取消选择，仅安装应用；不会卸载已有后台。更新保留原策略，新安装默认系统管理。" start_selected="true">
+    <pkg-ref id="io.cellmori.installer.backend"/>
+  </choice>
+  <pkg-ref id="io.cellmori.installer.app">app.pkg</pkg-ref>
+  <pkg-ref id="io.cellmori.installer.app"><must-close><app id="io.cellmori.app"/></must-close></pkg-ref>
+  <pkg-ref id="io.cellmori.installer.backend">backend.pkg</pkg-ref>
+</installer-gui-script>

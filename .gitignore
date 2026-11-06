@@ -1,0 +1,36 @@
+# macOS and editors
+.DS_Store
+.AppleDouble
+.LSOverride
+.idea/
+.vscode/
+*.swp
+*~
+
+# Build and release products
+.build/
+.installer-build/
+dist/
+*.app/
+*.pkg
+*.dmg
+*.zip
+*.o
+*.dSYM/
+
+# Signing credentials
+*.p12
+*.pfx
+*.pem
+*.key
+*.mobileprovision
+.env
+.env.*
+
+# Local diagnostics and battery data
+history.json
+configuration.json
+state.json
+firmware-access.json
+client-identity.plist
+*.log

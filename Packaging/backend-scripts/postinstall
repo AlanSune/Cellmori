@@ -1,0 +1,32 @@
+#!/bin/bash
+set -euo pipefail
+PATH=/usr/bin:/bin:/usr/sbin:/sbin
+[[ "${3:-/}" = / ]] || { echo '后台只能注册到当前启动系统'; exit 1; }
+APP='/Applications/Cellmori.app'
+[[ -d "$APP" && ! -L "$APP" ]] || { echo '应用不存在或安装路径异常'; exit 1; }
+[[ "$(stat -f '%u' "$APP")" = 0 ]] || { echo '应用目录不是 root 所有，停止后台安装'; exit 1; }
+MODE=$(stat -f '%Lp' "$APP")
+(( (8#$MODE & 8#022) == 0 )) || { echo '应用目录权限异常'; exit 1; }
+/usr/bin/codesign --verify --deep --strict "$APP"
+SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd -P)"
+EXPECTED_HELPER=$(cat "$SCRIPT_DIR/helper.sha256")
+EXPECTED_SCRIPT=$(cat "$SCRIPT_DIR/install.sha256")
+ACTUAL_HELPER=$(/usr/bin/shasum -a 256 "$APP/Contents/Resources/cellmori-helper" | /usr/bin/awk '{print $1}')
+ACTUAL_SCRIPT=$(/usr/bin/shasum -a 256 "$APP/Contents/Resources/install.sh" | /usr/bin/awk '{print $1}')
+[[ "$EXPECTED_HELPER" = "$ACTUAL_HELPER" && "$EXPECTED_SCRIPT" = "$ACTUAL_SCRIPT" ]] || { echo '应用版本与安装组件不匹配，请使用同版本完整安装包'; exit 1; }
+/bin/bash "$APP/Contents/Resources/install.sh"
+EXPECTED_VERSION=$(cat "$SCRIPT_DIR/helper.version")
+STATE='/Library/Application Support/Cellmori/state.json'
+for ATTEMPT in {1..10}; do
+  PID=$(/bin/launchctl print system/io.cellmori.helper 2>/dev/null | /usr/bin/awk '/^[[:space:]]*pid = / {print $3;exit}' || true)
+  NAME=$(/usr/bin/plutil -extract serviceName raw -o - "$STATE" 2>/dev/null || true)
+  VERSION=$(/usr/bin/plutil -extract helperVersion raw -o - "$STATE" 2>/dev/null || true)
+  RESPONSE_PID=$(/usr/bin/plutil -extract daemonPID raw -o - "$STATE" 2>/dev/null || true)
+  if [[ -n "$PID" && "$RESPONSE_PID" = "$PID" && "$NAME" = io.cellmori.helper && "$VERSION" = "$EXPECTED_VERSION" ]]; then
+    echo "后台安装验证成功：$NAME，PID $PID，版本 $VERSION"
+    exit 0
+  fi
+  /bin/sleep 1
+done
+echo '后台注册已执行，但未收到匹配的新版响应。请打开应用的后台服务页检查或修复。'
+exit 1
