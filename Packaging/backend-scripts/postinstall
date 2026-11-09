@@ -24,6 +24,17 @@ for ATTEMPT in {1..10}; do
   RESPONSE_PID=$(/usr/bin/plutil -extract daemonPID raw -o - "$STATE" 2>/dev/null || true)
   if [[ -n "$PID" && "$RESPONSE_PID" = "$PID" && "$NAME" = io.cellmori.helper && "$VERSION" = "$EXPECTED_VERSION" ]]; then
     echo "后台安装验证成功：$NAME，PID $PID，版本 $VERSION"
+    # Run the GUI as the authorized console user, never as the root installer.
+    # This happens only after the app and the new daemon's response are verified.
+    CONSOLE_UID=$(/usr/bin/stat -f '%u' /dev/console)
+    AUTHORIZED_UID=$(/usr/libexec/PlistBuddy -c 'Print :userID' '/Library/Application Support/Cellmori/client-identity.plist' 2>/dev/null || true)
+    if [[ "$CONSOLE_UID" =~ ^[0-9]+$ && "$CONSOLE_UID" -ge 501 && "$CONSOLE_UID" = "$AUTHORIZED_UID" ]]; then
+      if ! /bin/launchctl asuser "$CONSOLE_UID" /usr/bin/sudo -H -u "#$CONSOLE_UID" /usr/bin/open "$APP"; then
+        echo '安装已完成，自动打开未成功；请从应用程序打开 Cellmori。'
+      fi
+    else
+      echo '安装已完成，当前没有匹配的图形登录用户；请登录后打开 Cellmori。'
+    fi
     exit 0
   fi
   /bin/sleep 1

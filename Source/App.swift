@@ -36,6 +36,7 @@ struct Sample: Codable, Identifiable {
     @Published var lastClosedDockPolicy = UserDefaults.standard.string(forKey: "lastClosedDockPolicy")
     @Published var showDockWhenPanelClosed = UserDefaults.standard.object(forKey: "showDockWhenPanelClosed") as? Bool ?? true {
         didSet {
+            guard !isPreview else { return }
             UserDefaults.standard.set(showDockWhenPanelClosed, forKey: "showDockWhenPanelClosed")
             updateDockVisibility()
         }
@@ -55,7 +56,7 @@ struct Sample: Codable, Identifiable {
     private var loadedSettings = false
     private var historyErrorReported = false
     private let historyDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Cellmori")
-    var installed: Bool { FileManager.default.isExecutableFile(atPath: helperPath) }
+    var installed: Bool { isPreview || FileManager.default.isExecutableFile(atPath: helperPath) }
     var live: Bool { state.map { Date().timeIntervalSince($0.updated) < 65 } ?? false }
     var adapterMode: Bool { state?.configuration.mode == .adapterLimit && state?.configuration.adapterFallback == true }
     var firmwareBackend: Bool { !adapterMode && (state?.capabilities ?? 0) & 4 != 0 }
@@ -93,7 +94,14 @@ struct Sample: Codable, Identifiable {
     }
     var percentageText: String { battery.map { "\(Int($0.percent.rounded()))%" } ?? "—" }
     var powerDisplay: PowerDisplayState { PowerDisplayState.resolve(battery) }
-    init() {
+    let updates: AppUpdater
+    private let isPreview: Bool
+    init(preview: Bool = false) {
+        isPreview = preview
+        updates = AppUpdater(preview: preview)
+        if preview { return }
+        updates.onError = { [weak self] message in self?.error = message }
+        updates.checkAutomaticallyIfDue()
         samples = (try? decode([Sample].self, path: historyDirectory.appendingPathComponent("history.json").path)) ?? []
         refresh(); checkService()
         timer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
@@ -144,7 +152,7 @@ struct Sample: Codable, Identifiable {
             }
         }
     }
-    func prepareToOpenPanel() { NSApp.setActivationPolicy(.regular) }
+    func prepareToOpenPanel() { if !isPreview { NSApp.setActivationPolicy(.regular) } }
     private func updateDockVisibility() {
         let panelOpen = NSApp.windows.contains { $0.identifier?.rawValue == "dashboard" && ($0.isVisible || $0.isMiniaturized) }
         NSApp.setActivationPolicy(panelOpen || showDockWhenPanelClosed ? .regular : .accessory)
@@ -768,7 +776,7 @@ struct Dashboard: View {
                 LabeledContent("系统",value:ProcessInfo.processInfo.operatingSystemVersionString)
                 LabeledContent("机型",value:model.machineModel)
                 LabeledContent("固件",value:model.firmwareVersion)
-                Text("macOS 26 的功能取决于实际固件和写权限，不能仅凭系统版本判断。本程序尚未完成 macOS 26 实机验收。")
+                Text("macOS 26 的功能取决于实际固件和写权限，不能仅凭系统版本判断。用户已报告在 MacBook Pro（M4）/ macOS 26 上完成全部功能验证，芯片为 M4，系统小版本未提供。其他设备仍需实际检测。")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Card(title:"自动探测的充电接口") {
@@ -794,7 +802,7 @@ struct Dashboard: View {
             Card(title:"适配器兼容模式 · 实验性") {
                 Text("用于充电接口被固件限制、但适配器仍可控的情况。通过外接供电与电池供电之间切换维持范围，会产生电量往返变化。")
                     .font(.callout).foregroundStyle(.secondary)
-                Text("仅开盖、清醒时有效；睡眠或合盖恢复供电。此模式不支持临时充满、手动放电和校准，也不能保证绕过系统原有限充。尚未做 macOS 26 实机测试。")
+                Text("仅开盖、清醒时有效；睡眠或合盖恢复供电。此模式不支持临时充满、手动放电和校准，也不能保证绕过系统原有限充。常规充电功能已有 macOS 26 用户实机反馈；本实验模式仍需单独核对。")
                     .font(.caption).foregroundStyle(.secondary)
                 if model.adapterMode {
                     Label("已手动启用",systemImage:"checkmark.circle").foregroundStyle(.orange)
@@ -817,6 +825,7 @@ struct Dashboard: View {
     }
     var settings: some View {
         VStack(spacing: 16) {
+            Card(title: "软件更新") { AppUpdateView(updater: model.updates) }
             Card(title: "温度保护") {
                 HStack {
                     Label("温度阈值", systemImage: "thermometer.medium")
@@ -854,7 +863,17 @@ struct Dashboard: View {
 struct MenuPopover: View {
     @EnvironmentObject var model: Model
     @Environment(\.openWindow) var openWindow
-    func open(_ page: Int) { model.prepareToOpenPanel(); model.selectedPage = page; NSApp.activate(ignoringOtherApps: true); openWindow(id: "dashboard") }
+    @State private var panelWindow = MenuPanelWindowReference()
+    func open(_ page: Int) {
+        MenuPanelNavigation.openDashboard(from: panelWindow.window) {
+            model.prepareToOpenPanel()
+            model.selectedPage = page
+        } show: {
+            openWindow(id: "dashboard")
+        } activate: {
+            NSApp.activate(ignoringOtherApps: true)
+        }
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
@@ -889,6 +908,7 @@ struct MenuPopover: View {
                 Text(serviceIdentifier).font(.system(.caption2, design: .monospaced)).foregroundStyle(.secondary)
                 Spacer(); Button("详情") { open(2) }.buttonStyle(.link)
             }
+            UpdateMenuButton(updater: model.updates) { open(3) }
             Divider()
             HStack {
                 Button { open(0) } label: { Label("打开面板", systemImage: "rectangle.on.rectangle") }
@@ -898,8 +918,10 @@ struct MenuPopover: View {
             }.buttonStyle(.plain).font(.callout)
             if model.busy { ProgressView().controlSize(.small).frame(maxWidth: .infinity) }
         }.padding(18).frame(width: 360).tint(cellmoriAccent)
+            .background(MenuPanelWindowCapture(reference: panelWindow).frame(width: 0, height: 0))
     }
 }
+#if !SCREENSHOT_EXPORT
 @main struct CellmoriApp: App {
     @StateObject private var model = Model()
     var body: some Scene {
@@ -914,5 +936,24 @@ struct MenuPopover: View {
                 .accessibilityLabel("Cellmori，\(model.powerDisplay.title)，电量 \(model.percentageText)")
                 .help("\(model.powerDisplay.title) · \(model.percentageText)")
         }.menuBarExtraStyle(.window)
+        .commands { CellmoriUpdateCommands(model: model) }
     }
 }
+
+struct CellmoriUpdateCommands: Commands {
+    @ObservedObject var model: Model
+    @Environment(\.openWindow) private var openWindow
+    var body: some Commands {
+        CommandGroup(after: .appInfo) {
+            Button("检查更新…") {
+                model.prepareToOpenPanel()
+                model.selectedPage = 3
+                openWindow(id: "dashboard")
+                NSApp.activate(ignoringOtherApps: true)
+                model.updates.check()
+            }
+        }
+    }
+}
+
+#endif

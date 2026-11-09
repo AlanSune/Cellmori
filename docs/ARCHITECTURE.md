@@ -12,6 +12,9 @@
 | `Source/ServiceStatus.swift` | launchd、进程、心跳与版本的只读检查 |
 | `Source/MenuBarIcon.swift` | 菜单栏模板图标与百分比 |
 | `Source/MakeIcon.swift` | 本地绘制应用图标 |
+| `Source/UpdateService.swift` | GitHub 正式版本选择、资源来源验证、下载与 SHA-256 校验 |
+| `Source/AppUpdater.swift` | 更新状态、可选自动检查、取消下载及系统安装器交接 |
+| `Source/MenuPanelNavigation.swift` | 捕获菜单面板窗口，先关闭发起跳转的面板，再显示主界面 |
 | `Source/PolicyTests.swift` | 不访问硬件的策略和验证测试 |
 | `Source/install.sh` / `uninstall.sh` | 安装、授权绑定和卸载 |
 | `Packaging/` | PKG 组件、安装页面和安装器检查 |

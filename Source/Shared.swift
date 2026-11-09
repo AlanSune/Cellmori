@@ -6,8 +6,8 @@ import IOKit.ps
 let serviceDirectory = "/Library/Application Support/Cellmori"
 let helperPath = "/Library/PrivilegedHelperTools/io.cellmori.helper"
 let serviceIdentifier = "io.cellmori.helper"
-let appVersion = "0.6.0"
-let expectedHelperVersion = "0.6.0"
+let appVersion = "0.6.2"
+let expectedHelperVersion = "0.6.2"
 let statePath = serviceDirectory + "/state.json"
 let configurationPath = serviceDirectory + "/configuration.json"
 
