@@ -34,3 +34,6 @@ state.json
 firmware-access.json
 client-identity.plist
 *.log
+
+policy-events.json
+sleep-recovery.json

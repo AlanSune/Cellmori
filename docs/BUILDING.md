@@ -16,11 +16,13 @@ xcode-select --install
 
 ```sh
 bash test.sh
+bash test-adapter.sh
+bash test-sleep.sh
 bash test-updates.sh
 bash test-ui.sh
 ```
 
-测试覆盖策略、服务状态、供电显示、临时流程文案及请求参数验证。测试不读取或写入 SMC、不安装服务、不发起 XPC 控制。当前有 102 项检查。它们不能代替真实设备的睡眠、充放电和恢复测试。
+测试覆盖策略、服务状态、供电显示、临时流程文案及请求参数验证。测试不读取或写入 SMC、不安装服务、不发起 XPC 控制。策略检查之外，适配器与睡眠控制测试分别模拟共享寄存器和系统设置，不执行实际 pmset 写入。它们不能代替真实设备的睡眠、充放电和恢复测试。
 
 ## 应用
 
@@ -36,11 +38,11 @@ bash build.sh
 bash build-installer.sh
 ```
 
-先构建应用，再生成 `dist/Cellmori-0.6.2-arm64.pkg`。安装器中间目录默认为 `.installer-build/`，可用 `CELLMORI_PACKAGE_WORK` 环境变量指定其他位置。
+先构建应用，再生成 `dist/Cellmori-0.6.6-arm64.pkg`。安装器中间目录默认为 `.installer-build/`，可用 `CELLMORI_PACKAGE_WORK` 环境变量指定其他位置。
 
 ```sh
 CELLMORI_PACKAGE_WORK="$PWD/.installer-build" bash build-installer.sh
-shasum -a 256 dist/Cellmori-0.6.2-arm64.pkg
+shasum -a 256 dist/Cellmori-0.6.6-arm64.pkg
 ```
 
 安装包不自动签署或公证。若正式签名，需要使用自己的 Apple Developer 证书；先完成最终应用/后台签名，再生成 PKG，避免安装清单中的哈希与最终文件不一致。后台绑定安装时的应用与后台代码哈希，重建后应更新绑定。

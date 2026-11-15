@@ -20,6 +20,9 @@ struct Sample: Codable, Identifiable {
     @Published var state: ServiceState?
     @Published var target: Double = 80
     @Published var dischargeTarget: Double = 50
+    @Published var dischargeKeepAwake = UserDefaults.standard.bool(forKey: "dischargeKeepAwake") {
+        didSet { if !isPreview { UserDefaults.standard.set(dischargeKeepAwake, forKey: "dischargeKeepAwake") } }
+    }
     @Published var temperatureLimit: Double = 40
     @Published var error: String? { didSet { if let error { enqueueError(error) } } }
     @Published var notice: String?
@@ -84,12 +87,12 @@ struct Sample: Codable, Identifiable {
     var status: String {
         guard installed else { return "只读监测 · 尚未安装后台服务" }
         guard live else { return "后台状态过期，请检查服务" }
-        if state?.error != nil { return "系统管理 · 最近操作未完成" }
+        if state?.error != nil { return "策略待确认 · 后台正在重试" }
         var flowBattery = battery
         // The helper uses independent physical AC detection, unlike the raw flag
         // which can disappear when this app deliberately cuts adapter power.
         if let physical = state?.battery?.external { flowBattery?.external = physical }
-        if let c = state?.configuration, let flow = temporaryFlowStatus(c, battery: flowBattery) { return flow }
+        if let c = state?.configuration, let flow = temporaryFlowStatus(c, battery: flowBattery, sleepHoldActive: state?.sleepHoldActive == true) { return flow }
         return state?.message ?? "等待后台服务"
     }
     var percentageText: String { battery.map { "\(Int($0.percent.rounded()))%" } ?? "—" }
@@ -169,6 +172,9 @@ struct Sample: Codable, Identifiable {
         } else if state?.error == nil { lastBackendError = nil }
         if !loadedSettings, let c = state?.configuration {
             target = Double(c.target); dischargeTarget = Double(c.dischargeTarget); temperatureLimit = c.temperatureLimit
+            if let keepAwake = c.dischargeKeepAwake, temporaryFlow || UserDefaults.standard.object(forKey:"dischargeKeepAwake") == nil {
+                dischargeKeepAwake = keepAwake
+            }
             loadedSettings = true
         }
         if let b = battery, Date().timeIntervalSince(samples.last?.date ?? .distantPast) >= 60 {
@@ -279,6 +285,9 @@ struct Sample: Codable, Identifiable {
     }
     func apply(_ mode: Mode) {
         guard service.healthy else { error = "后台服务尚未确认正常运行，请在后台服务页检查或修复后重试。"; selectedPage = 2; return }
+        guard state?.helperVersion == expectedHelperVersion else {
+            error = "请先更新后台服务，再应用新版控制策略。"; selectedPage = 2; return
+        }
         let effective = mode == .limit && adapterMode ? Mode.adapterLimit : mode
         if effective == .adapterLimit && service.state?.helperVersion != expectedHelperVersion {
             error="请先更新后台服务，才能使用适配器兼容模式。";selectedPage=2;return
@@ -288,11 +297,11 @@ struct Sample: Codable, Identifiable {
         let saved = state?.configuration
         let dailyTarget = [.full, .discharge, .calibrate].contains(mode) ? saved?.target ?? Int(target) : Int(target)
         let thermal = [.full, .discharge, .calibrate].contains(mode) ? saved?.temperatureLimit ?? temperatureLimit : temperatureLimit
-        admin(["configure", effective.rawValue, String(dailyTarget), String(Int(thermal)), String(Int(dischargeTarget))])
+        admin(["configure", effective.rawValue, String(dailyTarget), String(Int(thermal)), String(Int(dischargeTarget)), dischargeKeepAwake ? "1" : "0"])
     }
     func stopTemporaryFlow() {
         guard temporaryFlow, let c = state?.configuration, service.healthy else { return }
-        admin(["configure", Mode.limit.rawValue, String(c.target), String(Int(c.temperatureLimit)), String(c.dischargeTarget)])
+        admin(["configure", Mode.limit.rawValue, String(c.target), String(Int(c.temperatureLimit)), String(c.dischargeTarget), c.dischargeKeepAwake == true ? "1" : "0"])
     }
     func enableAdapterMode() {
         guard canEnableAdapterMode else { error="当前不满足适配器兼容模式条件：需要新版后台、适配器控制和物理电源检测，且普通充电接口不可用。";return }
@@ -336,6 +345,11 @@ struct Sample: Codable, Identifiable {
         alert.informativeText = mode == .calibrate
           ? "电脑会依次充满电、保持满电 30 分钟、放电至 20%，然后再次充满。整个流程可能需要数小时。\n\n请接通电源并保持开盖。你可以随时点击“停止校准”，恢复已保存的 \(dailyLimit)% 日常上限。校准用于观察电量计量表现，不能修复电池老化。"
           : "即使插着电源，电脑也会暂时使用电池，让电量降至 \(Int(dischargeTarget))%。达到目标后，恢复适配器供电，并继续执行已保存的 \(dailyLimit)% 日常上限。\n\n放电期间请保持开盖。睡眠或合盖会暂停主动放电，唤醒并开盖后继续。你可以随时点击“停止放电”。"
+        if dischargeKeepAwake {
+            alert.informativeText = alert.informativeText.replacingOccurrences(of:"请接通电源并保持开盖。", with:"请接通电源。")
+                .replacingOccurrences(of:"放电期间请保持开盖。睡眠或合盖会暂停主动放电，唤醒并开盖后继续。", with:"")
+            alert.informativeText += "\n\n已开启放电期间保持唤醒：主动放电阶段会暂时禁止系统睡眠，合盖后电脑仍在运行。达到目标、暂停、停止或断开电源后恢复原睡眠设置。校准的其他阶段仍按系统睡眠设置运行。"
+        }
         alert.addButton(withTitle: mode == .calibrate ? "开始校准" : "开始放电")
         alert.addButton(withTitle: "取消")
         if alert.runModal() == .alertFirstButtonReturn { apply(mode) }
@@ -390,21 +404,61 @@ struct Sample: Codable, Identifiable {
     }
 }
 
+let cellmoriAccent = Color(red: 0.96, green: 0.47, blue: 0.16)
+
+extension PowerDisplayState {
+    var interfaceColor: Color {
+        switch self {
+        case .charging: return .green
+        case .external: return cellmoriAccent
+        case .battery: return .blue
+        case .unavailable: return .secondary
+        }
+    }
+}
+
+// Keep integer control values without the dense tick marks of a stepped slider.
+func wholeNumber(_ value: Binding<Double>) -> Binding<Double> {
+    Binding(get: { value.wrappedValue }, set: { value.wrappedValue = $0.rounded() })
+}
+
+struct PrimaryButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var enabled
+    func makeBody(configuration: ButtonStyleConfiguration) -> some View {
+        configuration.label
+            .foregroundStyle(enabled ? Color.white : Color.secondary)
+            .padding(.horizontal, 14).padding(.vertical, 10)
+            .background(enabled ? cellmoriAccent.opacity(configuration.isPressed ? 0.8 : 1) : Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+struct SoftButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var enabled
+    var selected = false
+    func makeBody(configuration: ButtonStyleConfiguration) -> some View {
+        configuration.label
+            .foregroundStyle(selected ? cellmoriAccent : Color.primary)
+            .padding(.horizontal, 12).padding(.vertical, 9)
+            .background(selected ? cellmoriAccent.opacity(configuration.isPressed ? 0.18 : 0.10) : Color.primary.opacity(configuration.isPressed ? 0.08 : 0.035), in: RoundedRectangle(cornerRadius: 11))
+            .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(Color.primary.opacity(0.035)))
+            .opacity(enabled ? 1 : 0.42)
+    }
+}
+
 struct Card<Content: View>: View {
     var title: String
     @ViewBuilder var content: Content
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            if !title.isEmpty { Text(title).font(.headline) }
+        VStack(alignment: .leading, spacing: 16) {
+            if !title.isEmpty { Text(title).font(.system(size: 14, weight: .semibold)) }
             content
         }
-        .padding(20).frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.primary.opacity(0.05)))
+        .padding(22).frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 20))
+        .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(Color.primary.opacity(0.055)))
+        .shadow(color: .black.opacity(0.025), radius: 12, y: 4)
     }
 }
-
-let cellmoriAccent = Color(red: 0.96, green: 0.47, blue: 0.16)
 
 struct BatteryGlyph: View {
     var fraction: Double
@@ -412,17 +466,19 @@ struct BatteryGlyph: View {
     var body: some View {
         HStack(spacing: 4) {
             ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 12).strokeBorder(.primary.opacity(0.14), lineWidth: 3)
+                RoundedRectangle(cornerRadius: 14).fill(Color.primary.opacity(0.035))
+                RoundedRectangle(cornerRadius: 14).strokeBorder(Color.primary.opacity(0.12), lineWidth: 2)
                 GeometryReader { g in
-                    RoundedRectangle(cornerRadius: 7).fill(cellmoriAccent.gradient)
-                        .frame(width: max(4, (g.size.width-12) * min(1,max(0,fraction))))
+                    RoundedRectangle(cornerRadius: 9)
+                        .fill(LinearGradient(colors: [cellmoriAccent.opacity(0.72), cellmoriAccent], startPoint: .topLeading, endPoint: .bottomTrailing))
+                        .frame(width: max(0, (g.size.width-12) * min(1,max(0,fraction))))
                         .padding(6)
                 }
-                if charging { Image(systemName: "bolt.fill").font(.system(size: 27, weight: .semibold)).foregroundStyle(.white).frame(maxWidth: .infinity) }
+                if charging { Image(systemName: "bolt.fill").font(.system(size: 25, weight: .semibold)).foregroundStyle(.white).frame(maxWidth: .infinity) }
             }
-            RoundedRectangle(cornerRadius: 3).fill(.primary.opacity(0.16)).frame(width: 6, height: 22)
+            Capsule().fill(Color.primary.opacity(0.18)).frame(width: 5, height: 20)
         }.frame(width: 112, height: 62)
-        .accessibilityLabel("电池电量 \(Int(fraction*100))%")
+        .accessibilityElement(children: .ignore).accessibilityLabel("电池电量 \(Int(fraction*100))%")
     }
 }
 
@@ -437,7 +493,7 @@ struct ServiceBadge: View {
             Text(compact ? (model.service.healthy ? "后台运行中" : model.service.condition.title) : model.service.condition.title)
                 .font(.caption.weight(.medium))
         }.padding(.horizontal, 10).padding(.vertical, 6)
-            .background(color.opacity(0.09), in: Capsule())
+            .foregroundStyle(color).background(color.opacity(0.075), in: Capsule())
             .help("\(serviceIdentifier) · \(model.service.detail)")
     }
 }
@@ -454,10 +510,11 @@ struct Dashboard: View {
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 10) {
-                    Image(systemName: "bolt.batteryblock.fill").font(.system(size: 27)).foregroundStyle(cellmoriAccent)
+                    Image(systemName: "bolt.fill").font(.system(size: 20, weight: .semibold)).foregroundStyle(.white)
+                        .frame(width: 36, height: 36).background(cellmoriAccent.gradient, in: RoundedRectangle(cornerRadius: 11))
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Cellmori").font(.headline)
-                        Text("电池管家").font(.caption).foregroundStyle(.secondary)
+                        Text("电池管理").font(.system(size: 10, weight: .medium)).foregroundStyle(.tertiary)
                     }
                 }.padding(.horizontal, 12).padding(.top, 24).padding(.bottom, 22)
                 ForEach(0..<titles.count, id: \.self) { index in
@@ -466,7 +523,7 @@ struct Dashboard: View {
                     } label: {
                         Label(titles[index], systemImage: symbols[index])
                             .font(.system(size: 13, weight: model.selectedPage == index ? .semibold : .regular))
-                            .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).padding(.vertical, 10)
+                            .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).padding(.vertical, 12)
                             .foregroundStyle(model.selectedPage == index ? cellmoriAccent : .primary)
                             .background(model.selectedPage == index ? cellmoriAccent.opacity(0.11) : .clear, in: RoundedRectangle(cornerRadius: 9))
                     }.buttonStyle(.plain)
@@ -485,12 +542,12 @@ struct Dashboard: View {
             VStack(spacing: 0) {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 5) {
-                        Text(titles[model.selectedPage]).font(.system(size: 25, weight: .bold))
+                        Text(titles[model.selectedPage]).font(.system(size: 27, weight: .bold, design: .rounded))
                         Text(subtitle).font(.callout).foregroundStyle(.secondary)
                     }
                     Spacer()
                     Button { model.selectedPage = 2 } label: { ServiceBadge() }.buttonStyle(.plain)
-                }.padding(24)
+                }.padding(.horizontal, 28).padding(.top, 28).padding(.bottom, 22)
                 ScrollView {
                     VStack(spacing: 16) {
                         switch model.selectedPage {
@@ -500,7 +557,7 @@ struct Dashboard: View {
                         case 3: settings
                         default: compatibility
                         }
-                    }.padding(.horizontal, 24).padding(.bottom, 24)
+                    }.padding(.horizontal, 28).padding(.bottom, 28)
                 }
                 Divider()
                 HStack(spacing: 8) {
@@ -539,22 +596,20 @@ struct Dashboard: View {
         VStack(spacing: 16) {
             Card(title: "") {
                 HStack(spacing: 24) {
-                    BatteryGlyph(fraction: (model.battery?.percent ?? 0)/100, charging: model.powerDisplay == .charging)
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(model.percentageText).font(.system(size: 42, weight: .semibold, design: .rounded))
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("电池电量").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
+                        Text(model.percentageText).font(.system(size: 54, weight: .semibold, design: .rounded)).tracking(-1.5).monospacedDigit()
                         Label(model.powerDisplay.title, systemImage: model.powerDisplay.symbol)
-                            .font(.callout).foregroundStyle(.secondary)
+                            .font(.system(size: 12, weight: .medium)).foregroundStyle(model.powerDisplay.interfaceColor)
                     }
                     Spacer(minLength: 0)
+                    BatteryGlyph(fraction: (model.battery?.percent ?? 0)/100, charging: model.powerDisplay == .charging)
                 }
-                Divider()
-                HStack {
-                    Label(model.battery.map { String(format: "%.1f °C", $0.temperature) } ?? "— °C", systemImage: "thermometer.medium")
-                    Spacer()
-                    Label(model.battery.map { String(format: "%+.1f W", $0.watts) } ?? "— W", systemImage: "bolt")
-                    Spacer()
-                    Label(model.systemHealth, systemImage: "heart")
-                }.font(.callout).foregroundStyle(.secondary).monospacedDigit()
+                HStack(spacing: 12) {
+                    batteryMetric("温度", value: model.battery.map { String(format: "%.1f °C", $0.temperature) } ?? "—", icon: "thermometer.medium")
+                    batteryMetric("电池功率", value: model.battery.map { String(format: "%+.1f W", $0.watts) } ?? "—", icon: "bolt")
+                    batteryMetric("电池健康", value: model.systemHealth, icon: "heart")
+                }
             }
             if model.temporaryFlow {
                 Card(title: model.activeFlowTitle) {
@@ -569,7 +624,7 @@ struct Dashboard: View {
             Card(title: "充电上限") {
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 5) {
-                        Text(model.adapterMode ? "适配器兼容限充" : model.firmwareBackend ? "固件限充" : "日常限充").font(.callout.weight(.medium))
+                        Text("设定日常充电目标").font(.callout.weight(.medium))
                         Text("回充范围 \(Int(model.target)-5)%–\(Int(model.target))%").font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
@@ -578,10 +633,10 @@ struct Dashboard: View {
                         .accessibilityLabel("充电上限百分比").onSubmit { _ = validateTarget() }
                     Text("%").font(.title2).foregroundStyle(.secondary)
                 }
-                Slider(value: $model.target, in: 40...100, step: 1).accessibilityLabel("充电上限")
+                Slider(value: wholeNumber($model.target), in: 40...100).accessibilityLabel("充电上限")
                 HStack {
                     ForEach([60, 80, 90, 100], id: \.self) { n in
-                        Button("\(n)%") { model.target = Double(n) }.buttonStyle(.bordered).controlSize(.small)
+                        Button("\(n)%") { model.target = Double(n) }.font(.system(size: 12, weight: .medium)).buttonStyle(SoftButtonStyle(selected: Int(model.target) == n))
                     }
                     Spacer()
                     Button(model.temporaryFlow ? "请先停止临时流程" : draftLimitApplied ? "已应用" : "应用上限") { if validateTarget() { model.apply(.limit) } }.buttonStyle(.borderedProminent)
@@ -607,21 +662,36 @@ struct Dashboard: View {
                 Divider()
                 HStack {
                     Label("接电放电至", systemImage: "battery.25percent")
-                    Slider(value: $model.dischargeTarget, in: 20...90, step: 1).frame(maxWidth: 180).accessibilityLabel("放电目标")
+                    Slider(value: wholeNumber($model.dischargeTarget), in: 20...90).frame(maxWidth: 180).accessibilityLabel("放电目标")
                     Text("\(Int(model.dischargeTarget))%").monospacedDigit().frame(width: 35)
                     Spacer(minLength: 0)
                     Button("开始…") { model.confirm(.discharge) }.disabled(!model.dischargeAvailable || model.busy || model.temporaryFlow)
                 }.font(.callout)
-                Text("临时流程可随时停止并恢复日常上限。“交还系统管理”会停止所有流程，恢复接管前设置；退出界面后后台仍继续运行。主动放电请保持开盖，最低保留 20%。")
+                Toggle("放电期间保持唤醒（支持合盖）", isOn: $model.dischargeKeepAwake)
+                    .toggleStyle(.switch).controlSize(.small).disabled(model.temporaryFlow || model.busy)
+                Text(model.dischargeKeepAwake ? "主动放电时临时禁止系统睡眠，合盖后电脑仍在运行。结束、暂停、停止或断电后恢复原睡眠设置。" : "默认关闭：合盖或睡眠时暂停主动放电，唤醒并开盖后继续。")
+                    .font(.caption).foregroundStyle(.secondary)
+                Text("临时流程可随时停止并恢复日常上限。“交还系统管理”会停止所有流程，恢复接管前设置；退出界面后后台仍继续运行。未开启保持唤醒时，主动放电请保持开盖；最低保留 20%。")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
     }
+    func batteryMetric(_ title: String, value: String, icon: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon).font(.system(size: 16)).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(title).font(.system(size: 10)).foregroundStyle(.secondary)
+                Text(value).font(.system(size: 14, weight: .medium, design: .rounded)).monospacedDigit()
+            }
+            Spacer(minLength: 0)
+        }.padding(12).frame(maxWidth: .infinity)
+            .background(Color.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: 12))
+    }
     func action(_ text: String, icon: String, enabled: Bool, perform: @escaping () -> Void) -> some View {
         Button(action: perform) {
-            VStack(spacing: 8) { Image(systemName: icon).font(.system(size: 21)); Text(text).font(.callout) }
+            VStack(spacing: 10) { Image(systemName: icon).font(.system(size: 22, weight: .medium)).foregroundStyle(cellmoriAccent); Text(text).font(.system(size: 12, weight: .medium)) }
                 .frame(maxWidth: .infinity).padding(.vertical, 11)
-        }.buttonStyle(.bordered).disabled(!enabled || model.busy)
+        }.buttonStyle(SoftButtonStyle()).disabled(!enabled || model.busy)
     }
     var health: some View {
         VStack(spacing: 16) {
@@ -687,6 +757,12 @@ struct Dashboard: View {
                 serviceRow("进程 PID", value: model.service.pid.map(String.init) ?? "未运行")
                 serviceRow("后台版本", value: model.service.state?.helperVersion.map { "v" + $0 } ?? "旧版（未上报）")
                 serviceRow("应用版本", value: "v" + appVersion)
+                serviceRow("睡眠控制", value: model.state?.sleepHoldActive == true ? (model.state?.error == nil ? "放电期间保持唤醒" : "恢复中，请查看错误") : "未接管")
+                if let actual = model.state?.firmwareObserved {
+                    serviceRow("固件实际上限", value: actual.activation == 2 ? "\(actual.upper)%（恢复充电：\(actual.lower)%）" : (model.state?.dischargeCommand == true ? "主动放电时暂时释放，结束或睡眠前恢复" : "未启用"))
+                } else {
+                    serviceRow("固件实际上限", value: "尚未读回确认")
+                }
                 HStack {
                     Text("最近响应").foregroundStyle(.secondary)
                     Spacer()
@@ -829,7 +905,7 @@ struct Dashboard: View {
             Card(title: "温度保护") {
                 HStack {
                     Label("温度阈值", systemImage: "thermometer.medium")
-                    Slider(value: $model.temperatureLimit, in: 35...42, step: 1)
+                    Slider(value: wholeNumber($model.temperatureLimit), in: 35...42)
                     Text("\(Int(model.temperatureLimit)) °C").monospacedDigit()
                 }
                 Text(model.firmwareBackend ? "固件模式下，达到阈值会暂停本应用流程并恢复原固件策略，不能直接切断充电。macOS 自身负责温控；降温 3°C 后继续。" : "达到阈值暂停充电，降温 3°C 后恢复。低于 5°C 暂停，回升至 8°C 后恢复。macOS 自身温控始终有效。")
@@ -874,52 +950,156 @@ struct MenuPopover: View {
             NSApp.activate(ignoringOtherApps: true)
         }
     }
+    private var protectionCaption: String {
+        guard model.live, let state = model.state else { return "只读监测 · 等待后台" }
+        if state.error != nil { return "策略待确认" }
+        if state.configuration.mode == .system { return "充电由 macOS 管理" }
+        return "日常上限 \(state.configuration.target)%"
+    }
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Image(systemName: "bolt.batteryblock.fill").foregroundStyle(cellmoriAccent)
-                Text("Cellmori").font(.headline)
-                Spacer()
-                Button { open(2) } label: { ServiceBadge(compact: true) }.buttonStyle(.plain)
+        VStack(alignment: .leading, spacing: 14) {
+            header
+            batterySummary
+            if model.temporaryFlow {
+                activeFlow
+                HStack(spacing: 7) {
+                    Image(systemName: "shield.lefthalf.filled")
+                    Text("结束后恢复 \(model.state?.configuration.target ?? 80)% 日常上限")
+                    Spacer()
+                }.font(.system(size: 11)).foregroundStyle(.secondary).padding(.horizontal, 2)
+            } else { limitControl }
+            HStack(spacing: 10) {
+                quickAction("充满一次", icon: "battery.100percent", enabled: model.fullAvailable && !model.temporaryFlow) { model.apply(.full) }
+                quickAction("放电与校准", icon: "slider.horizontal.3", enabled: true) { open(0) }
             }
-            HStack(spacing: 18) {
-                BatteryGlyph(fraction: (model.battery?.percent ?? 0)/100, charging: model.powerDisplay == .charging).scaleEffect(0.75).frame(width: 88, height: 50)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(model.percentageText).font(.system(size: 33, weight: .semibold, design: .rounded))
-                    Label(model.powerDisplay.title, systemImage: model.powerDisplay.symbol).font(.caption).foregroundStyle(.secondary)
+            if model.updates.available != nil {
+                UpdateMenuButton(updater: model.updates) { open(3) }.buttonStyle(.plain).foregroundStyle(cellmoriAccent)
+            }
+            footer
+        }
+        .padding(18).frame(width: 384).tint(cellmoriAccent)
+        .background(LinearGradient(colors: [Color(nsColor: .windowBackgroundColor), Color(nsColor: .controlBackgroundColor)], startPoint: .topLeading, endPoint: .bottomTrailing))
+        .background(MenuPanelWindowCapture(reference: panelWindow).frame(width: 0, height: 0))
+    }
+    private var header: some View {
+        HStack(spacing: 9) {
+            Image(systemName: "bolt.fill").font(.system(size: 13, weight: .bold)).foregroundStyle(.white)
+                .frame(width: 28, height: 28).background(cellmoriAccent.gradient, in: RoundedRectangle(cornerRadius: 9))
+            Text("Cellmori").font(.system(size: 14, weight: .semibold))
+            Spacer()
+            if model.busy { ProgressView().controlSize(.mini).accessibilityLabel("正在应用操作") }
+            Button { open(2) } label: { ServiceBadge(compact: true) }.buttonStyle(.plain)
+        }
+    }
+    private var batterySummary: some View {
+        VStack(alignment: .leading, spacing: 15) {
+            HStack(alignment: .center) {
+                VStack(alignment: .leading, spacing: 7) {
+                    Text(model.percentageText).font(.system(size: 47, weight: .semibold, design: .rounded)).tracking(-1.5).monospacedDigit()
+                    Label(model.powerDisplay.title, systemImage: model.powerDisplay.symbol)
+                        .font(.system(size: 12, weight: .medium)).foregroundStyle(model.powerDisplay.interfaceColor)
                 }
                 Spacer()
+                BatteryGlyph(fraction: (model.battery?.percent ?? 0)/100, charging: model.powerDisplay == .charging)
+                    .scaleEffect(0.8).frame(width: 96, height: 56)
             }
-            Divider()
-            HStack { Text("充电上限").font(.callout); Spacer(); Text("\(Int(model.target))%").font(.title3.bold()).monospacedDigit() }
-            Slider(value: $model.target, in: 40...100, step: 1).accessibilityLabel("充电上限")
-            HStack {
-                Button(model.limitButtonTitle) { model.apply(.limit) }.buttonStyle(.borderedProminent)
-                    .tint(model.limitApplied || model.temporaryFlow ? Color.gray : cellmoriAccent)
-                    .disabled(!model.chargeAvailable || model.busy || model.limitApplied || model.temporaryFlow)
-                Button("充满一次") { model.apply(.full) }.disabled(!model.fullAvailable || model.busy || model.temporaryFlow)
-                Button { open(0) } label: { Image(systemName: "ellipsis") }.help("更多充电操作")
+            HStack(spacing: 5) {
+                Image(systemName: "shield.lefthalf.filled")
+                Text(protectionCaption)
+                if model.state?.sleepHoldActive == true { Text("· 保持唤醒") }
+            }.font(.system(size: 11)).foregroundStyle(.secondary)
+            Divider().opacity(0.6)
+            HStack(spacing: 0) {
+                smallMetric("温度", value: model.battery.map { String(format:"%.1f°", $0.temperature) } ?? "—", icon: "thermometer.medium")
+                Spacer(minLength: 8)
+                smallMetric("电池功率", value: model.battery.map { String(format:"%+.1f W", $0.watts) } ?? "—", icon: "bolt")
+                Spacer(minLength: 8)
+                smallMetric("健康", value: model.systemHealth, icon: "heart")
             }
-            if model.temporaryFlow {
-                Text(model.status).font(.caption).foregroundStyle(.secondary)
-                Button(model.stopFlowTitle + "并恢复日常上限") { model.stopTemporaryFlow() }.disabled(model.busy || !model.service.healthy)
-            }
-            HStack {
-                Text(serviceIdentifier).font(.system(.caption2, design: .monospaced)).foregroundStyle(.secondary)
-                Spacer(); Button("详情") { open(2) }.buttonStyle(.link)
-            }
-            UpdateMenuButton(updater: model.updates) { open(3) }
-            Divider()
-            HStack {
-                Button { open(0) } label: { Label("打开面板", systemImage: "rectangle.on.rectangle") }
-                Spacer()
-                Button { open(3) } label: { Image(systemName: "gearshape") }.help("偏好设置")
-                Button { NSApp.terminate(nil) } label: { Image(systemName: "power") }.help("退出界面，后台继续运行")
-            }.buttonStyle(.plain).font(.callout)
-            if model.busy { ProgressView().controlSize(.small).frame(maxWidth: .infinity) }
-        }.padding(18).frame(width: 360).tint(cellmoriAccent)
-            .background(MenuPanelWindowCapture(reference: panelWindow).frame(width: 0, height: 0))
+        }.padding(17)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 19))
+            .overlay(RoundedRectangle(cornerRadius: 19).strokeBorder(Color.primary.opacity(0.055)))
     }
+    private func smallMetric(_ name: String, value: String, icon: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(name, systemImage: icon).font(.system(size: 10)).foregroundStyle(.secondary)
+            Text(value).font(.system(size: 13, weight: .medium, design: .rounded)).monospacedDigit().lineLimit(1)
+        }.accessibilityElement(children: .combine)
+    }
+    private var limitControl: some View {
+        VStack(spacing: 11) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("充电上限").font(.system(size: 13, weight: .semibold))
+                Spacer()
+                Text("\(Int(model.target))").font(.system(size: 25, weight: .semibold, design: .rounded)).monospacedDigit()
+                    .foregroundStyle(cellmoriAccent)
+                Text("%").font(.system(size: 12)).foregroundStyle(.secondary)
+            }
+            Slider(value: wholeNumber($model.target), in: 40...100)
+                .accessibilityLabel("充电上限").disabled(model.temporaryFlow || model.busy)
+            HStack(spacing: 8) {
+                ForEach([60, 80, 90, 100], id: \.self) { n in
+                    Button { model.target = Double(n) } label: {
+                        Text("\(n)%").font(.system(size: 11, weight: .medium)).frame(maxWidth: .infinity)
+                    }.buttonStyle(SoftButtonStyle(selected: Int(model.target) == n))
+                        .disabled(model.temporaryFlow || model.busy)
+                }
+            }
+            if model.limitApplied {
+                Label("上限已应用", systemImage: "checkmark.circle.fill")
+                    .font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity).padding(.vertical, 9)
+                    .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
+                    .accessibilityLabel("\(Int(model.target))% 充电上限已应用")
+            } else {
+                Button { model.apply(.limit) } label: {
+                    Text(model.limitButtonTitle).font(.system(size: 12, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                }.buttonStyle(PrimaryButtonStyle())
+                    .disabled(!model.chargeAvailable || model.busy || model.temporaryFlow)
+            }
+        }.padding(15)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 17))
+            .overlay(RoundedRectangle(cornerRadius: 17).strokeBorder(Color.primary.opacity(0.055)))
+    }
+    private var activeFlow: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack {
+                Label(model.activeFlowTitle, systemImage: "arrow.triangle.2.circlepath").font(.system(size: 12, weight: .semibold))
+                Spacer()
+                Button(model.stopFlowTitle) { model.stopTemporaryFlow() }.font(.system(size: 11, weight: .semibold))
+                    .disabled(model.busy || !model.service.healthy)
+            }
+            Text(model.status).font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }.padding(13).background(cellmoriAccent.opacity(0.07), in: RoundedRectangle(cornerRadius: 14))
+    }
+    private func quickAction(_ title: String, icon: String, enabled: Bool, perform: @escaping () -> Void) -> some View {
+        Button(action: perform) {
+            HStack(spacing: 8) {
+                Image(systemName: icon).font(.system(size: 16, weight: .medium)).foregroundStyle(cellmoriAccent)
+                Text(title).font(.system(size: 12, weight: .medium))
+                Spacer(minLength: 0)
+            }.frame(maxWidth: .infinity).padding(.vertical, 3)
+        }.buttonStyle(SoftButtonStyle()).disabled(!enabled || model.busy)
+    }
+    private var footer: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Button { open(2) } label: {
+                Text(serviceIdentifier).font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
+            }.buttonStyle(.plain).help("查看后台名称、版本与运行状态")
+            HStack(spacing: 16) {
+                Button { open(0) } label: {
+                    Label("打开控制面板", systemImage: "macwindow")
+                }.font(.system(size: 12, weight: .medium))
+                Spacer()
+                Button { open(3); if model.updates.available == nil { model.updates.check() } } label: { Image(systemName: "arrow.clockwise").frame(width: 24, height: 24) }
+                    .help("检查更新").accessibilityLabel("检查更新")
+                Button { open(3) } label: { Image(systemName: "gearshape").frame(width: 24, height: 24) }.help("偏好设置").accessibilityLabel("偏好设置")
+                Button { NSApp.terminate(nil) } label: { Image(systemName: "power").frame(width: 24, height: 24) }.help("退出界面，后台继续运行").accessibilityLabel("退出界面")
+            }.font(.system(size: 13)).foregroundStyle(.secondary).buttonStyle(.plain)
+        }.padding(.top, 2)
+    }
+
 }
 #if !SCREENSHOT_EXPORT
 @main struct CellmoriApp: App {

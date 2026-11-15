@@ -61,9 +61,9 @@ import Foundation
         _ = evaluate(&c, battery: b, now: now)
         check(c.mode == .limit, "calibration completion")
         c.mode = .calibrate; c.stage = "discharge"; c.stageStarted = now.addingTimeInterval(-13*3600); b.percent = 60
-        check(!evaluate(&c, battery: b, now: now).discharge && c.mode == .system, "discharge timeout")
+        check(!evaluate(&c, battery: b, now: now).discharge && c.mode == .limit, "discharge timeout retains daily ceiling")
         c.mode = .full; c.started = now.addingTimeInterval(-49*3600)
-        check(evaluate(&c, battery: b, now: now).charge && c.mode == .system, "operation timeout")
+        check(evaluate(&c, battery: b, now: now).charge && c.mode == .limit, "operation timeout retains daily ceiling")
         c = Configuration(); c.mode = .limit; b.failure = 1
         check(evaluate(&c, battery: b, now: now).charge && c.mode == .system, "battery failure releases control")
         let data = try JSONEncoder().encode(c)
@@ -72,13 +72,89 @@ import Foundation
         c=Configuration();c.mode = .limit;c.target=80
         check(firmwareSettings(for:c)==FirmwareSettings(activation:2,upper:80,lower:75), "firmware limit range")
         c.firmwareOriginal=FirmwareSettings(activation:2,upper:80,lower:79);c.thermalPaused=true
-        check(firmwareSettings(for:c)==c.firmwareOriginal, "firmware thermal pause preserves original")
+        check(firmwareSettings(for:c)==FirmwareSettings(activation:2,upper:80,lower:75), "firmware thermal pause retains daily ceiling")
         c.thermalPaused=false;c.mode = .full
-        check(firmwareSettings(for:c).activation==0, "firmware full releases limit")
+        check(firmwareSettings(for:c).activation==2, "firmware full permits 100 percent")
         c.mode = .calibrate
-        check(firmwareSettings(for:c).activation==0, "firmware calibration releases limit")
+        check(firmwareSettings(for:c).activation==2, "firmware calibration permits 100 percent")
         c.mode = .discharge
-        check(firmwareSettings(for:c).activation==0, "firmware manual discharge has no conflicting charge target")
+        check(firmwareSettings(for:c).activation==2, "firmware manual discharge retains ceiling")
+        c.firmwareOriginal = FirmwareSettings(activation:0,upper:100,lower:95)
+        c.thermalPaused = true
+        check(firmwareSettings(for:c).upper == 80, "thermal pause never restores disabled original ceiling")
+        c.thermalPaused = false; c.dischargeTarget = 50
+        b.temperature = 25; b.failure = 0; b.external = true; b.full = false; b.percent = 50
+        c.started = now
+        check(!evaluate(&c,battery:b,now:now).discharge && c.mode == .limit, "automatic discharge completion returns to daily policy")
+        check(firmwareSettings(for:c).upper == 80 && firmwareSleepSettings(for:c).upper == 80,
+              "completion followed by sleep retains 80 percent")
+        b.percent = 81
+        check(!evaluate(&c,battery:b,now:now.addingTimeInterval(3600)).charge && c.mode == .limit,
+              "wake after completed discharge still enforces daily limit")
+        let ceiling = firmwareSettings(for:c)
+        var observed = FirmwareSettings(activation:0,upper:100,lower:95)
+        var operations:[String] = []
+        let result = try applyFirmwareProtection(ceiling, discharge:false,
+            write: { observed = $0; operations.append("write") },
+            adapter: { _ in
+                check(observed == ceiling, "ceiling installed before adapter reconnect")
+                operations.append("reconnect")
+                observed = FirmwareSettings(activation:0,upper:100,lower:95)
+            }, read: { observed })
+        check(result == ceiling && operations == ["write","reconnect","write"], "reconnect reset is detected and repaired")
+        var adapterChanged = false
+        do {
+            _ = try applyFirmwareProtection(ceiling, discharge:false,
+                write: { _ in throw CMError.message("simulated write failure") },
+                adapter: { _ in adapterChanged = true }, read: { ceiling })
+            check(false,"write failure propagates")
+        } catch { check(!adapterChanged,"failed ceiling prevents reconnect during normal handoff") }
+        do {
+            _ = try applyFirmwareProtection(ceiling, discharge:false, write: { _ in },
+                adapter: { _ in }, read: { FirmwareSettings(activation:0,upper:100,lower:95) })
+            check(false,"persistent mismatch rejected")
+        } catch { check(true,"persistent mismatch is never reported as success") }
+        var flow = Configuration(); flow.mode = .discharge; flow.dischargeTarget = 90
+        var flowBattery = b; flowBattery.percent = 95; flowBattery.lidClosed = false
+        flowBattery.external = true; flowBattery.temperature = 25; flowBattery.failure = 0
+        let active = evaluate(&flow,battery:flowBattery,now:now)
+        let released = firmwareSettings(for:flow,discharging:active.discharge)
+        check(active.discharge && released.activation == 0,"active discharge releases conflicting firmware ceiling")
+        var cut = false; var actual = ceiling; var handoff:[String] = []
+        _ = try applyFirmwareProtection(released,discharge:true,
+            write: { value in
+                check(cut,"adapter isolation verified before releasing firmware ceiling")
+                actual = value; cut = false; handoff.append("release")
+            }, adapter: { value in cut=value;handoff.append(value ? "cut" : "reconnect") },read: { actual })
+        check(cut && handoff == ["cut","release","cut"],"adapter isolation reasserted after firmware change")
+        var wroteWithoutIsolation = false
+        do {
+            _ = try applyFirmwareProtection(released,discharge:true,
+                write: { _ in wroteWithoutIsolation=true },
+                adapter: { _ in throw CMError.message("adapter unavailable") },read: { released })
+            check(false,"adapter failure propagated")
+        } catch { check(!wroteWithoutIsolation,"failed adapter control never releases firmware ceiling") }
+        let asleep = firmwareSleepSettings(for:flow)
+        _ = try applyFirmwareProtection(asleep,discharge:false,write:{ actual=$0 },
+            adapter:{ value in
+                check(actual.activation == 2 && actual.upper == 80,"sleep restores ceiling before reconnect")
+                cut=value
+            },read:{ actual })
+        check(!cut && actual == ceiling,"sleep during discharge leaves active daily ceiling")
+        flowBattery.lidClosed = true
+        let paused = evaluate(&flow,battery:flowBattery,now:now)
+        check(!paused.discharge && firmwareSettings(for:flow,discharging:paused.discharge) == ceiling,
+              "closed lid restores ceiling instead of releasing it")
+        flowBattery.lidClosed = false;flowBattery.percent = 90
+        let completed = evaluate(&flow,battery:flowBattery,now:now)
+        check(flow.mode == .limit && !completed.discharge && firmwareSettings(for:flow) == ceiling,
+              "90 percent target restores saved 80 percent daily ceiling")
+        check(firmwareSleepSettings(for:flow) == ceiling,"sleep after completion keeps daily ceiling")
+        flow.mode = .discharge;flow.thermalPaused = true
+        check(firmwareSettings(for:flow,discharging:true) == ceiling,"thermal pause forbids releasing ceiling")
+        flow.thermalPaused = false;flow.mode = .calibrate;flow.stage = "discharge"
+        check(firmwareSettings(for:flow,discharging:true).activation == 0,"calibration discharge avoids firmware conflict")
+        check(firmwareSettings(for:flow) == ceiling,"error recovery during calibration discharge restores ceiling")
         let backupData=try JSONEncoder().encode(c)
         let backup=try JSONDecoder().decode(Configuration.self,from:backupData)
         check(backup.firmwareOriginal==c.firmwareOriginal, "original firmware setting persists")
@@ -190,6 +266,11 @@ import Foundation
         check(permittedControlRequest(["ping"]), "read-only control handshake")
         check(permittedControlRequest(["reset"]), "finite reset request")
         check(permittedControlRequest(["configure","discharge","79","40","50"]), "typed discharge request")
+        check(permittedControlRequest(["configure","discharge","80","40","90","1"]), "finite keep-awake opt-in request")
+        check(permittedControlRequest(["configure","discharge","80","40","90","0"]), "explicit keep-awake opt-out")
+        check(!permittedControlRequest(["configure","discharge","80","40","90","true"]), "noncanonical boolean rejected")
+        check(!permittedControlRequest(["configure","discharge","80","40","90","1","extra"]), "extended command remains finite")
+        check(!permittedControlRequest(["recover-sleep"]), "IPC cannot invoke private recovery entry")
         check(!permittedControlRequest(["prepare-update"]), "IPC cannot invoke installer maintenance")
         check(!permittedControlRequest(["tick"]), "IPC cannot inject background ticks")
         check(!permittedControlRequest(["serve"]), "IPC cannot launch servers")

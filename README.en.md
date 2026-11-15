@@ -22,7 +22,7 @@ Native macOS battery management · charge limits · full-charge override · disc
 - Make daily changes through authenticated XPC without repeated administrator prompts.
 - Check official releases in-app, download and verify the PKG, then open the macOS installer; the verified installation reopens the app as the logged-in user. Daily checks are on by default and can be disabled.
 
-App/helper version: **0.6.2**. Source license: **MIT**. No external package dependencies or built-in telemetry uploads.
+App/helper version: **0.6.6**. Changes since v0.6.2 include a redesigned interface, charge-limit recovery improvements and an opt-in keep-awake option during active discharge (off by default). Complete closed-lid and sleep recovery behavior still requires further hardware validation. Source license: **MIT**. No external package dependencies or built-in telemetry uploads.
 
 ## Interface previews
 
@@ -30,7 +30,7 @@ Images are offscreen renders of the actual application views using clearly label
 
 ![Battery health and local trends](docs/images/battery-health.png)
 
-<table><tr><td width="36%"><img src="docs/images/menu-panel.png" alt="Menu bar panel"></td><td><img src="docs/images/background-service.png" alt="Backend verification"></td></tr></table>
+<table><tr><td width="50%"><img src="docs/images/menu-panel.png" alt="Light menu bar panel"></td><td width="50%"><img src="docs/images/menu-panel-dark.png" alt="Dark menu bar panel"></td></tr></table>
 
 Opening the dashboard, preferences or backend details now dismisses the originating menu panel first, so it no longer stays above the destination window.
 
@@ -60,13 +60,15 @@ Use an Apple Silicon Mac with Xcode Command Line Tools; the known development to
 
 ```sh
 bash test.sh
+bash test-adapter.sh
+bash test-sleep.sh
 bash test-updates.sh
 bash test-ui.sh
 bash build.sh
 bash build-installer.sh
 ```
 
-Outputs: `Cellmori.app` and `dist/Cellmori-0.6.2-arm64.pkg`. Build/test commands do not install a daemon or change charging policies. Navigation tests use offscreen AppKit windows; they do not replace an actual menu bar interaction test on each macOS version.
+Outputs: `Cellmori.app` and `dist/Cellmori-0.6.6-arm64.pkg`. Build/test commands do not install a daemon or change charging policies. Navigation tests use offscreen AppKit windows; they do not replace an actual menu bar interaction test on each macOS version.
 
 ## Documentation and license
 

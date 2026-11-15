@@ -13,6 +13,6 @@ fi
 launchctl bootout system/io.cellmori.helper 2>/dev/null || true
 rm -f '/Library/LaunchDaemons/io.cellmori.helper.plist' "$HELPER"
 # Keep a strict list; do not recursively delete a directory as root.
-rm -f '/Library/Application Support/Cellmori/client-identity.plist' '/Library/Application Support/Cellmori/state.json' '/Library/Application Support/Cellmori/configuration.json' '/Library/Application Support/Cellmori/firmware-access.json' '/Library/Application Support/Cellmori/lock'
+rm -f '/Library/Application Support/Cellmori/client-identity.plist' '/Library/Application Support/Cellmori/state.json' '/Library/Application Support/Cellmori/configuration.json' '/Library/Application Support/Cellmori/firmware-access.json' '/Library/Application Support/Cellmori/lock' '/Library/Application Support/Cellmori/policy-events.json'
 rmdir '/Library/Application Support/Cellmori' 2>/dev/null || true
 echo '已恢复正常充电并移除后台服务。应用及个人历史记录可自行删除。'

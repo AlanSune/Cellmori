@@ -70,6 +70,12 @@ static int readKey(io_connect_t c, const char *key, Packet *value) {
     value->info = in.info;
     return result;
 }
+// CHIE reads a shared inhibit bitmap. Its command owns bit 3; other
+// request bits can remain set independently and must not be rewritten/cleared.
+static int valueMatches(const char *key, const uint8_t *actual, const uint8_t *desired, uint32_t size) {
+    if(size==1 && strcmp(key,"CHIE")==0) return (actual[0]&0x08)==(desired[0]&0x08);
+    return memcmp(actual,desired,size)==0;
+}
 static int setValue(io_connect_t c, const char *key, uint8_t byte, uint32_t size, char *error, int cap) {
     Packet current = {0};
     int result = readKey(c, key, &current);
@@ -77,12 +83,12 @@ static int setValue(io_connect_t c, const char *key, uint8_t byte, uint32_t size
         snprintf(error, cap, "%s read/size failed (%d)", key, result); return -4;
     }
     uint8_t desired[32]={0}; desired[0]=byte;
-    if (memcmp(current.bytes,desired,size)==0) return 0;
+    if (valueMatches(key,current.bytes,desired,size)) return 0;
     Packet in = {0}, out = {0};
     in.key = keyCode(key); in.info = current.info; in.command = 6; in.bytes[0] = byte;
     result = exchange(c, &in, &out);
     if (!result) result = readKey(c, key, &current);
-    if (!result && memcmp(current.bytes,desired,size)!=0) result = -5;
+    if (!result && !valueMatches(key,current.bytes,desired,size)) result = -5;
     if (result) snprintf(error, cap, "%s write/verification failed (%d)", key, result);
     return result;
 }
@@ -223,7 +229,7 @@ int cm_control(int charging, int discharging, char *error, int capacity) {
     uint8_t wanted[4]={expected,0,0,0};
     int same=readKey(c,b.charge,&charge)==0 && memcmp(charge.bytes,wanted,b.chargeSize)==0;
     if(b.secondCharge) same= same && readKey(c,b.secondCharge,&second)==0 && second.bytes[0]==expected;
-    if(b.adapter) same= same && readKey(c,b.adapter,&adapter)==0 && adapter.bytes[0]==(discharging?b.dischargeValue:0);
+    if(b.adapter) same= same && readKey(c,b.adapter,&adapter)==0 && valueMatches(b.adapter,adapter.bytes,(uint8_t[]){discharging?b.dischargeValue:0},1);
     if(same) {IOServiceClose(c);return 0;}
     if(b.adapter) r=setValue(c,b.adapter,0,1,error,capacity);
     if(!r) r=setValue(c,b.charge,expected,b.chargeSize,error,capacity);

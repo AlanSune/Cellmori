@@ -12,9 +12,9 @@ import SwiftUI
             failure: 0, lidClosed: false, providingPowerSource: "AC Power")
         var config = Configuration(); config.mode = .limit; config.target = 80
         let state = ServiceState(configuration: config, battery: battery,
-            message: "固件限充 75%–80%；充放电由固件决定", capabilities: 14)
+            message: "固件限充 75%–80%；充放电由固件决定", sleepHoldActive: false, firmwareExpected: FirmwareSettings(activation:2,upper:80,lower:75), firmwareObserved: FirmwareSettings(activation:2,upper:80,lower:75), capabilities: 14)
         model.battery = battery; model.state = state
-        model.target = 80; model.dischargeTarget = 50
+        model.target = 80; model.dischargeTarget = 50; model.dischargeKeepAwake = false
         model.systemHealth = "95%"; model.machineModel = "MacBook Pro（演示）"
         model.firmwareVersion = "演示数据"
         model.service = ServiceInspection.classify(binary: true, plist: true, registered: true,
@@ -29,7 +29,7 @@ import SwiftUI
         }
         return model
     }
-    @MainActor static func render<V: View>(_ content: V, size: CGSize, path: URL) throws {
+    @MainActor static func render<V: View>(_ content: V, size: CGSize, path: URL, scheme: ColorScheme = .light) throws {
         let root = VStack(spacing: 0) {
             content
             HStack {
@@ -38,12 +38,12 @@ import SwiftUI
             }.padding(.horizontal, 12).padding(.vertical, 6)
         }
         .background(Color(nsColor: .windowBackgroundColor))
-        .environment(\.colorScheme, .light)
+        .environment(\.colorScheme, scheme)
         let view = NSHostingView(rootView: root)
         view.frame = CGRect(origin: .zero, size: size)
         let window = NSWindow(contentRect: view.frame, styleMask: [.borderless], backing: .buffered, defer: true)
         window.isReleasedWhenClosed = false
-        window.appearance = NSAppearance(named: .aqua)
+        window.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
         window.contentView = view
         view.layoutSubtreeIfNeeded()
         RunLoop.main.run(until: Date().addingTimeInterval(0.4))
@@ -66,10 +66,25 @@ import SwiftUI
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         for (page, name) in [(0, "charge-control"), (1, "battery-health"), (2, "background-service"), (3, "software-updates")] {
             let model = demoModel(); model.selectedPage = page
-            try render(Dashboard().environmentObject(model), size: CGSize(width: 1000, height: page == 1 ? 1040 : page == 3 ? 1120 : 880),
+            try render(Dashboard().environmentObject(model), size: CGSize(width: 1000, height: page == 1 ? 1040 : page == 3 ? 1120 : page == 0 ? 1120 : 1000),
                        path: output.appendingPathComponent(name + ".png"))
         }
-        try render(MenuPopover().environmentObject(demoModel()), size: CGSize(width: 360, height: 415),
+        try render(MenuPopover().environmentObject(demoModel()), size: CGSize(width: 384, height: 610),
                    path: output.appendingPathComponent("menu-panel.png"))
+        try render(MenuPopover().environmentObject(demoModel()), size: CGSize(width: 384, height: 610),
+                   path: output.appendingPathComponent("menu-panel-dark.png"), scheme: .dark)
+        let editing = demoModel(); editing.target = 90
+        try render(MenuPopover().environmentObject(editing), size: CGSize(width: 384, height: 610),
+                   path: output.appendingPathComponent("menu-panel-editing.png"))
+        let active = demoModel()
+        active.battery?.percent = 94; active.battery?.providingPowerSource = "Battery Power"
+        active.battery?.lidClosed = true; active.battery?.amperage = -600
+        active.state?.configuration.mode = .discharge; active.state?.configuration.dischargeTarget = 90
+        active.state?.configuration.dischargeKeepAwake = true; active.state?.sleepHoldActive = true
+        active.state?.dischargeCommand = true; active.state?.battery = active.battery
+        active.state?.firmwareObserved = FirmwareSettings(activation:0,upper:100,lower:95)
+        active.dischargeKeepAwake = true
+        try render(MenuPopover().environmentObject(active), size: CGSize(width: 384, height: 710),
+                   path: output.appendingPathComponent("menu-panel-active.png"))
     }
 }

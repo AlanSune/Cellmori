@@ -9,7 +9,7 @@
 ![macOS](https://img.shields.io/badge/macOS-15%20%7C%2026-111827?logo=apple&logoColor=white)
 ![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-arm64-f97316)
 [![MIT License](https://img.shields.io/badge/license-MIT-22c55e)](LICENSE)
-[![Release](https://img.shields.io/badge/release-0.6.2-f97316)](https://github.com/AlanSune/Cellmori/releases/tag/v0.6.2)
+[![Release](https://img.shields.io/badge/release-0.6.6-f97316)](https://github.com/AlanSune/Cellmori/releases/tag/v0.6.6)
 
 [下载正式版 PKG](https://github.com/AlanSune/Cellmori/releases/latest) · [English](README.en.md) · [使用指南](docs/USAGE.md) · [反馈问题](https://github.com/AlanSune/Cellmori/issues)
 
@@ -24,18 +24,19 @@
 | 长时间插电办公 | 设置 40%–100% 日常上限，以 5 个百分点回差维持充电策略 |
 | 出门前准备满电 | “充满一次”，完成后恢复已保存的日常上限 |
 | 插着电也想降低电量 | 主动放电至指定目标，支持随时停止并恢复日常上限 |
+| 想合盖继续放电 | 可选开启“放电期间保持唤醒”；电脑保持运行，结束后恢复原睡眠设置 |
 | 看懂电池状态 | 系统最大容量、循环次数、温度、电流及本地趋势 |
 | 少开一个大窗口 | 菜单栏显示电量与供电来源，快捷面板完成常用操作 |
 | 想及时升级 | 应用内检查正式版、查看说明、下载校验包并打开系统安装器 |
 | 不想反复输入密码 | 安装后台时授权，日常控制通过校验身份的 XPC 执行 |
 
-当前应用与后台均为 **0.6.2**，采用 [MIT 许可证](LICENSE)，没有第三方包依赖。原生 SwiftUI / AppKit 界面，本地处理电池数据，无账户、无内置遥测上传；仅检查或下载更新时连接 GitHub。
+当前应用与后台均为 **0.6.6**。本次相对 v0.6.2 更新界面、充放电交接与可选保持唤醒；“放电期间保持唤醒（支持合盖）”默认关闭，完整合盖与睡眠恢复仍待进一步实机验证。采用 [MIT 许可证](LICENSE)，没有第三方包依赖。原生 SwiftUI / AppKit 界面，本地处理电池数据，无账户、无内置遥测上传；仅检查或下载更新时连接 GitHub。
 
 **macOS 26 已有 MacBook Pro（M4）用户实机验证。** 用户报告在 0.6.0 系列中“全部功能”均已验证可用；芯片为 M4；未提供系统小版本或逐项日志。这是该设备上的使用反馈，不表示所有 Mac 与固件均保证兼容。详见[兼容性与验证范围](docs/COMPATIBILITY.md)。
 
 ## 功能预览
 
-以下图片由应用真实 SwiftUI 视图离屏渲染，标有“演示数据”，不包含个人电池记录，也不是 macOS 26 的实机截图。
+以下图片来自 0.6.6，由应用真实 SwiftUI 视图离屏渲染，标有“演示数据”，不包含个人电池记录，也不是 macOS 26 的实机截图。
 
 ### 健康信息与趋势
 
@@ -45,10 +46,10 @@
 
 ### 菜单栏快捷操作与可核对的后台
 
-打开主界面、偏好或后台详情时，快捷面板会先关闭，不再遮挡操作。后台页明确展示服务名称、版本、进程和响应状态。
+小窗聚焦电量、供电来源和上限，支持浅色与深色外观；放电时突出停止入口。打开主界面、偏好或后台详情时，快捷面板会先关闭，不再遮挡操作。后台页明确展示服务名称、版本、进程和响应状态。
 
 <table>
-<tr><td width="36%"><img src="docs/images/menu-panel.png" alt="菜单栏快捷面板"></td><td><img src="docs/images/background-service.png" alt="后台服务身份与状态"></td></tr>
+<tr><td width="50%"><img src="docs/images/menu-panel.png" alt="浅色菜单栏快捷面板"></td><td width="50%"><img src="docs/images/menu-panel-dark.png" alt="深色菜单栏快捷面板"></td></tr>
 </table>
 
 ### 应用内检查更新
@@ -81,7 +82,9 @@
 ## 从源码构建
 
 ```sh
-bash test.sh                 # 102 项无硬件策略检查
+bash test.sh                 # 策略、服务与请求参数检查
+bash test-adapter.sh         # 模拟适配器控制器检查
+bash test-sleep.sh           # 模拟睡眠接管与恢复检查
 bash test-updates.sh         # 版本选择、来源及下载校验检查
 bash test-ui.sh              # 菜单栏面板导航的离屏回归检查
 bash build.sh               # 构建并本地签名应用

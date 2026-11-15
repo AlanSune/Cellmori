@@ -6,8 +6,8 @@ import IOKit.ps
 let serviceDirectory = "/Library/Application Support/Cellmori"
 let helperPath = "/Library/PrivilegedHelperTools/io.cellmori.helper"
 let serviceIdentifier = "io.cellmori.helper"
-let appVersion = "0.6.2"
-let expectedHelperVersion = "0.6.2"
+let appVersion = "0.6.6"
+let expectedHelperVersion = "0.6.6"
 let statePath = serviceDirectory + "/state.json"
 let configurationPath = serviceDirectory + "/configuration.json"
 
@@ -91,7 +91,7 @@ enum PowerDisplayState: CaseIterable {
         switch self {
         case .charging: return "bolt.fill"
         case .external: return "powerplug.fill"
-        case .battery: return "arrow.down.right"
+        case .battery: return "battery.0percent"
         case .unavailable: return "questionmark"
         }
     }
@@ -124,26 +124,55 @@ struct Configuration: Codable {
     var ownsHardware: Bool = false
     var firmwareOriginal: FirmwareSettings? = nil
     var adapterFallback: Bool? = nil
+    var dischargeKeepAwake: Bool? = nil // Missing in old configurations means off.
 }
 struct FirmwareSettings: Codable, Equatable {
     var activation: Int
     var upper: Int
     var lower: Int
 }
-func firmwareSettings(for c: Configuration) -> FirmwareSettings {
-    if c.thermalPaused, let original = c.firmwareOriginal { return original }
-    if c.mode == .limit { return FirmwareSettings(activation: 2, upper: c.target, lower: c.target-5) }
-    // Temporary full charge and calibration explicitly release the firmware limit.
-    return FirmwareSettings(activation: 0, upper: 100, lower: 95)
+func firmwareSettings(for c: Configuration, discharging: Bool = false) -> FirmwareSettings {
+    // On this controller, firmware limiting keeps macOS in AC Power despite
+    // CHIE discharge. Release it only during actual, open-lid active discharge.
+    if discharging && !c.thermalPaused && (c.mode == .discharge || c.mode == .calibrate && c.stage == "discharge") {
+        return FirmwareSettings(activation: 0, upper: 100, lower: 95)
+    }
+    let temporaryFull = !c.thermalPaused && (c.mode == .full || c.mode == .calibrate && c.stage != "discharge")
+    let upper = temporaryFull ? 100 : c.target
+    return FirmwareSettings(activation: 2, upper: upper, lower: upper-5)
+}
+// Install the ceiling before reconnecting, then verify after adapter changes.
+// Some controllers can reset charging policy when external power is restored.
+func applyFirmwareProtection(_ expected: FirmwareSettings, discharge: Bool,
+                             write: (FirmwareSettings) throws -> Void,
+                             adapter: (Bool) throws -> Void,
+                             read: () throws -> FirmwareSettings) throws -> FirmwareSettings {
+    if discharge && expected.activation == 0 {
+        // Verify adapter isolation BEFORE releasing the firmware ceiling.
+        // Reassert after firmware changes, which may affect adapter policy.
+        try adapter(true)
+        try write(expected)
+        try adapter(true)
+    } else {
+        try write(expected)
+        try adapter(discharge)
+    }
+    if try read() != expected {
+        try write(expected)
+        if discharge { try adapter(true) }
+    }
+    let observed = try read()
+    guard observed == expected else { throw CMError.message("固件上限读回不一致，后台将重试") }
+    return observed
 }
 func firmwareSleepSettings(for c: Configuration) -> FirmwareSettings {
     var upper=c.target
-    if c.mode == .full || c.mode == .calibrate && c.stage != "discharge" { upper=100 }
+    if !c.thermalPaused && (c.mode == .full || c.mode == .calibrate && c.stage != "discharge") { upper=100 }
     if c.mode == .discharge { upper=max(40,min(c.target,c.dischargeTarget)) }
     return FirmwareSettings(activation:2,upper:upper,lower:upper-5)
 }
 // Presentation only: never treat a submitted command as observed charging.
-func temporaryFlowStatus(_ c: Configuration, battery b: Battery?) -> String? {
+func temporaryFlowStatus(_ c: Configuration, battery b: Battery?, sleepHoldActive: Bool = false) -> String? {
     guard [.full, .discharge, .calibrate].contains(c.mode) else { return nil }
     guard let b else { return "正在读取电池状态" }
     if c.thermalPaused { return "温度保护中，临时流程已暂停" }
@@ -154,7 +183,7 @@ func temporaryFlowStatus(_ c: Configuration, battery b: Battery?) -> String? {
         return b.charging ? "正在充电至 100%；完成后恢复日常上限" : "已解除本程序限充，等待系统开始充电"
     }
     if c.mode == .discharge {
-        if b.lidClosed != false { return "放电已暂停，请保持开盖" }
+        if b.lidClosed != false && !(c.dischargeKeepAwake == true && sleepHoldActive) { return "放电已暂停，请保持开盖" }
         return b.providingPowerSource == "Battery Power"
             ? "放电流程进行中，目标 \(c.dischargeTarget)%"
             : "放电指令已提交，等待系统切换至电池供电"
@@ -176,6 +205,9 @@ struct ServiceState: Codable {
     var error: String?
     var chargeCommand: Bool?
     var dischargeCommand: Bool?
+    var sleepHoldActive: Bool? = nil
+    var firmwareExpected: FirmwareSettings? = nil
+    var firmwareObserved: FirmwareSettings? = nil
     var capabilities: Int? = nil
     var serviceName: String? = serviceIdentifier
     var helperVersion: String? = expectedHelperVersion
@@ -188,7 +220,7 @@ struct Decision {
 }
 
 // Pure policy: no hardware access. Persisted state makes wake/relaunch transitions explicit.
-func evaluate(_ config: inout Configuration, battery b: Battery, now: Date) -> Decision {
+func evaluate(_ config: inout Configuration, battery b: Battery, now: Date, sleepHoldConfirmed: Bool = false) -> Decision {
     let delta = min(30, max(0, now.timeIntervalSince(config.lastTick ?? now)))
     config.lastTick = now
     func finish(_ message: String) -> Decision {
@@ -198,7 +230,7 @@ func evaluate(_ config: inout Configuration, battery b: Battery, now: Date) -> D
     if config.mode == .system { return Decision() }
     if b.failure != 0 { config.mode = .system; return Decision(message: "电池故障标记：已恢复系统管理") }
     if [.full, .discharge, .calibrate].contains(config.mode), now.timeIntervalSince(config.started) > 48*3600 {
-        config.mode = .system; return Decision(message: "操作超过 48 小时，已恢复系统管理")
+        return finish("操作超过 48 小时，已停止临时流程并恢复日常上限")
     }
     if config.thermalPaused {
         if b.temperature <= config.temperatureLimit - 3 && b.temperature >= 8 { config.thermalPaused = false }
@@ -224,8 +256,8 @@ func evaluate(_ config: inout Configuration, battery b: Battery, now: Date) -> D
         return Decision(message: "临时充电至 100%")
     case .discharge:
         if b.percent <= Double(config.dischargeTarget) { return finish("目标放电完成，已恢复原上限") }
-        if b.lidClosed != false { return Decision(charge: false, message: "放电已暂停：请开盖使用") }
-        return Decision(charge: false, discharge: true, message: "接电放电至 \(config.dischargeTarget)%；请保持开盖")
+        if b.lidClosed != false && !(config.dischargeKeepAwake == true && sleepHoldConfirmed) { return Decision(charge: false, message: "放电已暂停：请开盖使用") }
+        return Decision(charge: false, discharge: true, message: "接电放电至 \(config.dischargeTarget)%；" + (sleepHoldConfirmed ? "保持唤醒中，可合盖" : "请保持开盖"))
     case .calibrate:
         switch config.stage {
         case "charge":
@@ -237,15 +269,23 @@ func evaluate(_ config: inout Configuration, battery b: Battery, now: Date) -> D
             return Decision(message: "校准 2/4：满电保持 \(Int(config.holdingSeconds/60))/30 分钟")
         case "discharge":
             if b.percent <= 20 { config.stage = "recharge"; config.stageStarted = now; return Decision(message: "校准 4/4：充回 100%") }
-            if now.timeIntervalSince(config.stageStarted) > 12*3600 { config.mode = .system; return Decision(message: "校准放电超时，已恢复系统管理") }
-            if b.lidClosed != false { return Decision(charge: false, message: "校准放电已暂停：请开盖使用") }
-            return Decision(charge: false, discharge: true, message: "校准 3/4：放电至 20%；请保持开盖")
+            if now.timeIntervalSince(config.stageStarted) > 12*3600 { return finish("校准放电超时，已停止流程并恢复日常上限") }
+            if b.lidClosed != false && !(config.dischargeKeepAwake == true && sleepHoldConfirmed) { return Decision(charge: false, message: "校准放电已暂停：请开盖使用") }
+            return Decision(charge: false, discharge: true, message: "校准 3/4：放电至 20%；" + (sleepHoldConfirmed ? "保持唤醒中，可合盖" : "请保持开盖"))
         case "recharge":
             if b.full || b.percent >= 100 { return finish("校准流程完成，已恢复原上限；请观察后续容量趋势") }
             return Decision(message: "校准 4/4：充回 100%")
         default: config.mode = .system; return Decision(message: "校准状态异常，已恢复系统管理")
         }
     }
+}
+
+// Plan with a copy: acquiring a sleep hold must not consume time or advance a
+// persisted calibration stage. Actual policy evaluation runs exactly once.
+func needsDischargeSleepHold(_ c: Configuration, battery: Battery, now: Date) -> Bool {
+    guard c.dischargeKeepAwake == true, c.mode == .discharge || c.mode == .calibrate else { return false }
+    var candidate = c
+    return evaluate(&candidate, battery: battery, now: now, sleepHoldConfirmed: true).discharge
 }
 
 func encode<T: Encodable>(_ value: T, path: String) throws {

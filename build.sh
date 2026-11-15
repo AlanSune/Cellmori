@@ -7,7 +7,7 @@ BUILD="$ROOT/.build"
 mkdir -p "$BUILD/module-cache" "$APP/Contents/MacOS" "$APP/Contents/Resources"
 xcrun clang -O2 -Wall -Wextra -c "$ROOT/Source/SMC.c" -o "$BUILD/SMC.o"
 FLAGS=(-O -module-cache-path "$BUILD/module-cache" -import-objc-header "$ROOT/Source/SMC.h" -framework IOKit -framework Foundation -framework SystemConfiguration)
-xcrun swiftc "${FLAGS[@]}" "$ROOT/Source/Shared.swift" "$ROOT/Source/ControlChannel.swift" "$ROOT/Source/Helper.swift" "$BUILD/SMC.o" -o "$APP/Contents/Resources/cellmori-helper"
+xcrun swiftc "${FLAGS[@]}" "$ROOT/Source/Shared.swift" "$ROOT/Source/ControlChannel.swift" "$ROOT/Source/SleepControl.swift" "$ROOT/Source/Helper.swift" "$BUILD/SMC.o" -o "$APP/Contents/Resources/cellmori-helper"
 xcrun swiftc "${FLAGS[@]}" -framework SwiftUI -framework AppKit -framework Charts -framework ServiceManagement "$ROOT/Source/Shared.swift" "$ROOT/Source/ControlChannel.swift" "$ROOT/Source/ServiceStatus.swift" "$ROOT/Source/MenuBarIcon.swift" "$ROOT/Source/MenuPanelNavigation.swift" "$ROOT/Source/UpdateService.swift" "$ROOT/Source/AppUpdater.swift" "$ROOT/Source/App.swift" "$BUILD/SMC.o" -o "$APP/Contents/MacOS/Cellmori"
 cp "$ROOT/LICENSE" "$APP/Contents/Resources/LICENSE"
 cp "$ROOT/Source/install.sh" "$ROOT/Source/uninstall.sh" "$APP/Contents/Resources/"
@@ -20,8 +20,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundleName</key><string>Cellmori</string>
 <key>CFBundleDisplayName</key><string>Cellmori 电池管家</string>
 <key>CFBundleIdentifier</key><string>io.cellmori.app</string>
-<key>CFBundleVersion</key><string>18</string>
-<key>CFBundleShortVersionString</key><string>0.6.2</string>
+<key>CFBundleVersion</key><string>22</string>
+<key>CFBundleShortVersionString</key><string>0.6.6</string>
 <key>CFBundleExecutable</key><string>Cellmori</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>CFBundlePackageType</key><string>APPL</string>

@@ -29,7 +29,7 @@ GitHub 网页上传时，应上传此目录内部文件，使 LICENSE 与 README
 - 核对新增代码、图标和引用材料的来源许可；MIT 不能覆盖未经授权的第三方内容。
 - 检查名称与目标市场的商标风险；公开检索无结果不是权利保证。
 - 确认 Source/Shared.swift 的应用/后台版本、build.sh 的版本和 CHANGELOG 一致。
-- 运行 `bash test.sh`、`bash build.sh`、`bash build-installer.sh`。
+- 运行 `bash test.sh`、`bash test-adapter.sh`、`bash test-sleep.sh`、`bash test-updates.sh`、`bash test-ui.sh`、`bash build.sh`、`bash build-installer.sh`。
 - 确认没有个人绝对路径、密码、密钥、证书、设备序列号、历史采样和 root 配置。
 - 启用 GitHub 私密漏洞报告。没有安全邮箱时不要虚构联系方式。
 - 分别记录新装、升级、停止、交还系统、卸载、睡眠/唤醒与故障恢复的实际验证结果；未测试的明确标注。
@@ -40,10 +40,10 @@ GitHub 网页上传时，应上传此目录内部文件，使 LICENSE 与 README
 二进制放 GitHub Releases，不提交进 Git 历史。构建生成的是未签名、未公证 PKG，应用和后台使用本地 ad-hoc 签名。
 
 ```sh
-(cd dist && shasum -a 256 Cellmori-0.6.2-arm64.pkg > Cellmori-0.6.2-arm64.pkg.sha256)
+(cd dist && shasum -a 256 Cellmori-0.6.6-arm64.pkg > Cellmori-0.6.6-arm64.pkg.sha256)
 ```
 
-创建 `v0.6.2` 标签和 Release 时，上传 PKG 与校验文件，附上对应提交、支持范围、签名状态、已知限制和验证结果。本次按维护者要求发布正式 Release；没有 Developer ID 签名与公证的事实仍须明确披露。
+创建 `v0.6.6` 标签和 Release 时，上传 PKG 与校验文件，附上对应提交、支持范围、签名状态、已知限制和验证结果。本次按维护者要求发布正式 Release；没有 Developer ID 签名与公证的事实仍须明确披露。
 
 正式 Developer ID 签名和公证需要维护者自己的证书及账号。当前脚本未实现自动公证。最终签名在打包之前完成，避免签名绑定或安装清单哈希失配；不要把证书或密钥放入仓库。
 

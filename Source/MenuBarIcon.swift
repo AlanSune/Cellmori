@@ -3,7 +3,7 @@ import AppKit
 
 // Compact native-style silhouette. Solid template fill and reversed digits avoid gray tint.
 @MainActor func makeMenuBarIcon(percent: Double?, state: PowerDisplayState) -> NSImage {
-    let image = NSImage(size: NSSize(width: 39, height: 16), flipped: false) { _ in
+    let image = NSImage(size: NSSize(width: state == .battery ? 28 : 39, height: 16), flipped: false) { _ in
         let body = NSRect(x: 0.75, y: 2, width: 24, height: 12)
         let outline = NSBezierPath(roundedRect: body, xRadius: 2, yRadius: 2)
         NSColor.black.setStroke(); outline.lineWidth = 1; outline.stroke()
@@ -29,7 +29,7 @@ import AppKit
             text.draw(at: origin)
             NSGraphicsContext.restoreGraphicsState()
         }
-        if let symbol = NSImage(systemSymbolName: state.symbol, accessibilityDescription: state.title)?
+        if state != .battery, let symbol = NSImage(systemSymbolName: state.symbol, accessibilityDescription: state.title)?
             .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 10, weight: .medium)) {
             symbol.draw(in: NSRect(x: 29, y: 3, width: 10, height: 10))
         }
