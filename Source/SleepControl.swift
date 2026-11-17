@@ -38,26 +38,63 @@ struct SleepHoldController {
 }
 
 enum SystemSleepControl {
-    // Fixed executable and finite arguments; never execute a shell or accept a path.
-    private static func command(_ arguments: [String]) throws -> String {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/pmset")
-        process.arguments = arguments
-        let pipe = Pipe(); process.standardOutput = pipe; process.standardError = pipe
-        try process.run()
-        let deadline = Date().addingTimeInterval(3)
-        while process.isRunning && Date() < deadline { usleep(20_000) }
-        if process.isRunning {
-            process.terminate()
-            usleep(50_000)
-            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
-            process.waitUntilExit()
-            throw CMError.message("系统睡眠控制超时，未确认保持唤醒")
+    // Never pump the daemon's run loop while its policy lock is held.
+    // Foundation Process.waitUntilExit can dispatch a timer that reacquires it.
+    static func output(executable: String, arguments: [String], timeout: TimeInterval = 3) throws -> String {
+        var descriptors: [Int32] = [0, 0]
+        guard pipe(&descriptors) == 0 else { throw CMError.message("无法建立睡眠控制通道") }
+        defer { close(descriptors[0]) }
+        var actions: posix_spawn_file_actions_t?
+        posix_spawn_file_actions_init(&actions)
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        posix_spawn_file_actions_adddup2(&actions, descriptors[1], STDOUT_FILENO)
+        posix_spawn_file_actions_adddup2(&actions, descriptors[1], STDERR_FILENO)
+        posix_spawn_file_actions_addclose(&actions, descriptors[0])
+        posix_spawn_file_actions_addclose(&actions, descriptors[1])
+        let strings = ([executable] + arguments).map { strdup($0) }
+        defer { for string in strings { free(string) } }
+        var argv = strings + [nil]
+        var pid: pid_t = 0
+        let spawn = posix_spawn(&pid, executable, &actions, nil, &argv, environ)
+        close(descriptors[1])
+        guard spawn == 0 else { throw CMError.message("无法启动睡眠控制：\(spawn)") }
+        var reaped = false
+        defer {
+            if !reaped {
+                kill(pid, SIGKILL)
+                let child = pid
+                DispatchQueue.global().async { var status: Int32 = 0; _ = waitpid(child, &status, 0) }
+            }
         }
-        process.waitUntilExit()
-        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        guard process.terminationStatus == 0 else { throw CMError.message("系统睡眠控制失败：" + output.trimmingCharacters(in: .whitespacesAndNewlines)) }
-        return output
+        guard fcntl(descriptors[0], F_SETFL, O_NONBLOCK) == 0 else { throw CMError.message("无法读取睡眠控制结果") }
+        var data = Data(), buffer = [UInt8](repeating: 0, count: 4096)
+        let deadline = ProcessInfo.processInfo.systemUptime + timeout
+        var status: Int32 = 0
+        while true {
+            while true {
+                let count = Darwin.read(descriptors[0], &buffer, buffer.count)
+                if count > 0 {
+                    data.append(contentsOf: buffer.prefix(count))
+                    guard data.count <= 65536 else { throw CMError.message("睡眠控制输出异常") }
+                } else if count == 0 || errno == EAGAIN || errno == EWOULDBLOCK { break }
+                else if errno != EINTR { throw CMError.message("读取睡眠控制结果失败") }
+            }
+            if !reaped {
+                let result = waitpid(pid, &status, WNOHANG)
+                if result == pid { reaped = true; continue } // Drain remaining output once more.
+                if result < 0 && errno != EINTR { throw CMError.message("无法确认睡眠控制结果") }
+            } else { break }
+            guard ProcessInfo.processInfo.systemUptime < deadline else {
+                throw CMError.message("系统睡眠控制超时，未确认保持唤醒")
+            }
+            usleep(10_000)
+        }
+        let text = String(data: data, encoding: .utf8) ?? ""
+        guard status == 0 else { throw CMError.message("系统睡眠控制失败：" + text.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        return text
+    }
+    private static func command(_ arguments: [String]) throws -> String {
+        try output(executable: "/usr/bin/pmset", arguments: arguments)
     }
     static func parseDisabled(_ output: String) throws -> Bool {
         let matches = output.split(whereSeparator: \.isNewline).compactMap { line -> String? in

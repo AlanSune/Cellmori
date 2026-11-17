@@ -18,7 +18,7 @@ ACTUAL_SCRIPT=$(/usr/bin/shasum -a 256 "$APP/Contents/Resources/install.sh" | /u
 EXPECTED_VERSION=$(cat "$SCRIPT_DIR/helper.version")
 STATE='/Library/Application Support/Cellmori/state.json'
 for ATTEMPT in {1..10}; do
-  PID=$(/bin/launchctl print system/io.cellmori.helper 2>/dev/null | /usr/bin/awk '/^[[:space:]]*pid = / {print $3;exit}' || true)
+  PID=$(/bin/launchctl print system/io.cellmori.helper 2>/dev/null | /usr/bin/awk '/^[[:space:]]*pid = / && !found {print $3;found=1}' || true)
   NAME=$(/usr/bin/plutil -extract serviceName raw -o - "$STATE" 2>/dev/null || true)
   VERSION=$(/usr/bin/plutil -extract helperVersion raw -o - "$STATE" 2>/dev/null || true)
   RESPONSE_PID=$(/usr/bin/plutil -extract daemonPID raw -o - "$STATE" 2>/dev/null || true)

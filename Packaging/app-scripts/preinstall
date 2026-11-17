@@ -11,3 +11,14 @@ if [[ -e /Applications/Cellmori.app ]]; then
   EXISTING_ID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' /Applications/Cellmori.app/Contents/Info.plist 2>/dev/null || true)
   [[ "$EXISTING_ID" = io.cellmori.app ]] || { echo '安装位置存在其他应用，停止覆盖'; exit 1; }
 fi
+
+# A running old GUI would otherwise survive replacement and keep its old signature.
+CONSOLE_UID=$(/usr/bin/stat -f '%u' /dev/console)
+PIDS=$(/bin/ps -axo uid=,pid=,comm= | /usr/bin/awk -v user="$CONSOLE_UID" '$1==user && $3=="/Applications/Cellmori.app/Contents/MacOS/Cellmori" {print $2}')
+for PID in $PIDS; do
+  /bin/kill -TERM "$PID" 2>/dev/null || true
+  for ATTEMPT in {1..20}; do
+    /bin/kill -0 "$PID" 2>/dev/null || break
+    /bin/sleep 0.1
+  done
+done

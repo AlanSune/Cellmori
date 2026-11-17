@@ -35,6 +35,20 @@ private final class SimulatedSystem {
         do { try body();fatalError("FAIL: " + name) } catch { count += 1 }
     }
     static func main() throws {
+        var timerFired = false
+        let timer = Timer.scheduledTimer(withTimeInterval: 0.01, repeats: false) { _ in timerFired = true }
+        let response = try SystemSleepControl.output(executable: "/bin/sh", arguments: ["-c", "sleep 0.08; printf done"])
+        check(response == "done", "bounded child returns output")
+        check(!timerFired, "waiting never reenters the policy timer run loop")
+        RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+        check(timerFired, "pending policy timer runs only after operation returns")
+        timer.invalidate()
+        rejects("nonzero child exit is reported") { _ = try SystemSleepControl.output(executable: "/bin/sh", arguments: ["-c", "echo failed >&2; exit 2"]) }
+        let began = ProcessInfo.processInfo.systemUptime
+        rejects("stalled child is bounded") { _ = try SystemSleepControl.output(executable: "/bin/sleep", arguments: ["5"], timeout: 0.05) }
+        check(ProcessInfo.processInfo.systemUptime-began < 1, "timeout returns without waiting for stalled child")
+        rejects("oversized child output is bounded") { _ = try SystemSleepControl.output(executable: "/usr/bin/yes", arguments: ["x"]) }
+        rejects("missing executable is reported") { _ = try SystemSleepControl.output(executable: "/nonexistent/cellmori-test", arguments: []) }
         check(try SystemSleepControl.parseDisabled("System-wide power settings:\n SleepDisabled\t0\n") == false,"parse original normal sleep")
         check(try SystemSleepControl.parseDisabled(" SleepDisabled 1\n") == true,"parse pre-existing disable")
         rejects("missing flag is not silently assumed false") { _ = try SystemSleepControl.parseDisabled("sleep 1") }

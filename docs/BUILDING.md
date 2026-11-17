@@ -18,6 +18,7 @@ xcode-select --install
 bash test.sh
 bash test-adapter.sh
 bash test-sleep.sh
+bash test-installer.sh
 bash test-updates.sh
 bash test-ui.sh
 ```
@@ -38,11 +39,11 @@ bash build.sh
 bash build-installer.sh
 ```
 
-先构建应用，再生成 `dist/Cellmori-0.6.6-arm64.pkg`。安装器中间目录默认为 `.installer-build/`，可用 `CELLMORI_PACKAGE_WORK` 环境变量指定其他位置。
+先构建应用，再生成 `dist/Cellmori-0.6.8-arm64.pkg`。安装器中间目录默认为 `.installer-build/`，可用 `CELLMORI_PACKAGE_WORK` 环境变量指定其他位置。
 
 ```sh
 CELLMORI_PACKAGE_WORK="$PWD/.installer-build" bash build-installer.sh
-shasum -a 256 dist/Cellmori-0.6.6-arm64.pkg
+shasum -a 256 dist/Cellmori-0.6.8-arm64.pkg
 ```
 
 安装包不自动签署或公证。若正式签名，需要使用自己的 Apple Developer 证书；先完成最终应用/后台签名，再生成 PKG，避免安装清单中的哈希与最终文件不一致。后台绑定安装时的应用与后台代码哈希，重建后应更新绑定。
@@ -56,3 +57,6 @@ shasum -a 256 dist/Cellmori-0.6.6-arm64.pkg
 `bash render-screenshots.sh` 通过实际应用视图与演示模型生成 `docs/images/` 配图。不会读取硬件、安装后台或写入应用偏好；图片带有演示数据水印，不作为实机验收证据。
 
 `bash test-updates.sh` 使用模拟 HTTP 响应和临时文件检查版本选择、来源、校验、篡改与异常情况，不联网、不安装软件。
+
+
+`bash test-installer.sh` 在临时目录使用隔离子进程测试等待期限、健康/阻塞交接、停止失败、安全恢复失败、并发文件锁和进程退出后的锁释放。不会操作真实 launchd 服务或写入硬件。真实旧后台死锁升级验证需要管理员授权；其方法、恢复结果和限制见 VALIDATION.md。

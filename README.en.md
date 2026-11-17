@@ -22,7 +22,7 @@ Native macOS battery management · charge limits · full-charge override · disc
 - Make daily changes through authenticated XPC without repeated administrator prompts.
 - Check official releases in-app, download and verify the PKG, then open the macOS installer; the verified installation reopens the app as the logged-in user. Daily checks are on by default and can be disabled.
 
-Latest release: **0.6.7 (build 26)**. This release improves live charging-state observation, native macOS views and operation feedback while retaining the v0.6.6 charging policies. Installation and two start/cancel cycles were verified on M1/macOS 15.8.2; mouse/XPC end-to-end and M4/macOS 26 validation of this fix remain outstanding. See [validation](docs/VALIDATION.md). Source license: **MIT**. No external package dependencies or built-in telemetry uploads.
+Latest release: **0.6.8 (build 28)**. Fixes the daemon deadlock during sleep-control subprocess waits and adds bounded upgrade recovery. Real PKG upgrades passed with an unmodified v0.6.7 helper placed in a controlled same-process file-lock deadlock, and with a healthy daemon. Both retained the saved 80% limit and advancing heartbeats. See [validation](docs/VALIDATION.md) for the exact test method and limits; this is not M4/macOS 26 hardware certification. Source license: **MIT**. No external package dependencies or built-in telemetry uploads.
 
 ## Interface previews
 
@@ -64,13 +64,14 @@ Use an Apple Silicon Mac with Xcode Command Line Tools; the known development to
 bash test.sh
 bash test-adapter.sh
 bash test-sleep.sh
+bash test-installer.sh
 bash test-updates.sh
 bash test-ui.sh
 bash build.sh
 bash build-installer.sh
 ```
 
-Outputs: `Cellmori.app` and `dist/Cellmori-0.6.7-arm64.pkg`. Build/test commands do not install a daemon or change charging policies. Navigation tests use offscreen AppKit windows; they do not replace an actual menu bar interaction test on each macOS version.
+Outputs: `Cellmori.app` and `dist/Cellmori-0.6.8-arm64.pkg`. Build/test commands do not install a daemon or change charging policies. Navigation tests use offscreen AppKit windows; they do not replace an actual menu bar interaction test on each macOS version.
 
 ## Documentation and license
 
