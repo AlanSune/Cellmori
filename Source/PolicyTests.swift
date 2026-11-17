@@ -283,6 +283,22 @@ import Foundation
         check(ControlIdentity.validHash(String(repeating:"a",count:40)), "exact signing hash syntax")
         check(!ControlIdentity.validHash("a\" or true"), "requirement injection rejected")
         check(!ControlIdentity.validHash(String(repeating:"a",count:39)), "truncated signing hash rejected")
+        do {
+            var native = b;native.external=true;native.providingPowerSource="AC Power";native.charging=false
+            let charging=applyingLiveCurrent(native,milliamps:1500,volts:12)
+            check(charging.charging && PowerDisplayState.resolve(charging) == .charging,"live current corrects stale not-charging flag")
+            native.charging=true
+            let stopped=applyingLiveCurrent(native,milliamps:0,volts:12)
+            check(!stopped.charging && PowerDisplayState.resolve(stopped) == .external,"live zero current corrects stale charging flag")
+            let draining=applyingLiveCurrent(native,milliamps:-500,volts:12)
+            check(PowerDisplayState.resolve(draining) == .external,"negative current never invents battery supply")
+            native.providingPowerSource="Battery Power"
+            check(PowerDisplayState.resolve(applyingLiveCurrent(native,milliamps:1500,volts:12)) == .battery,"native supply source preserved independently")
+            check(applyingLiveCurrent(native,milliamps:nil,volts:nil).charging==native.charging,"unavailable telemetry falls back")
+            check(applyingLiveCurrent(native,milliamps:.nan,volts:12).charging==native.charging,"invalid current rejected")
+            check(applyingLiveCurrent(native,milliamps:1500,volts:99).charging==native.charging,"invalid voltage rejected")
+            check(applyingLiveCurrent(native,milliamps:75,volts:12).charging==native.charging,"near-zero dead band preserves native observation")
+        }
         print("PASS: \(count) policy, service and power-display checks; no hardware writes")
     }
 }

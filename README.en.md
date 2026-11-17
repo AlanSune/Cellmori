@@ -22,9 +22,11 @@ Native macOS battery management · charge limits · full-charge override · disc
 - Make daily changes through authenticated XPC without repeated administrator prompts.
 - Check official releases in-app, download and verify the PKG, then open the macOS installer; the verified installation reopens the app as the logged-in user. Daily checks are on by default and can be disabled.
 
-App/helper version: **0.6.6**. Changes since v0.6.2 include a redesigned interface, charge-limit recovery improvements and an opt-in keep-awake option during active discharge (off by default). Complete closed-lid and sleep recovery behavior still requires further hardware validation. Source license: **MIT**. No external package dependencies or built-in telemetry uploads.
+Latest release: **0.6.7 (build 26)**. This release improves live charging-state observation, native macOS views and operation feedback while retaining the v0.6.6 charging policies. Installation and two start/cancel cycles were verified on M1/macOS 15.8.2; mouse/XPC end-to-end and M4/macOS 26 validation of this fix remain outstanding. See [validation](docs/VALIDATION.md). Source license: **MIT**. No external package dependencies or built-in telemetry uploads.
 
 ## Interface previews
+
+The current release uses native macOS sidebar navigation, the system accent color, a material menu panel, and light/dark appearances.
 
 Images are offscreen renders of the actual application views using clearly labelled demo data. They are not macOS 26 hardware screenshots or personal battery records.
 
@@ -68,7 +70,7 @@ bash build.sh
 bash build-installer.sh
 ```
 
-Outputs: `Cellmori.app` and `dist/Cellmori-0.6.6-arm64.pkg`. Build/test commands do not install a daemon or change charging policies. Navigation tests use offscreen AppKit windows; they do not replace an actual menu bar interaction test on each macOS version.
+Outputs: `Cellmori.app` and `dist/Cellmori-0.6.7-arm64.pkg`. Build/test commands do not install a daemon or change charging policies. Navigation tests use offscreen AppKit windows; they do not replace an actual menu bar interaction test on each macOS version.
 
 ## Documentation and license
 

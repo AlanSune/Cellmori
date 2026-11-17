@@ -6,8 +6,8 @@ import IOKit.ps
 let serviceDirectory = "/Library/Application Support/Cellmori"
 let helperPath = "/Library/PrivilegedHelperTools/io.cellmori.helper"
 let serviceIdentifier = "io.cellmori.helper"
-let appVersion = "0.6.6"
-let expectedHelperVersion = "0.6.6"
+let appVersion = "0.6.7"
+let expectedHelperVersion = "0.6.7"
 let statePath = serviceDirectory + "/state.json"
 let configurationPath = serviceDirectory + "/configuration.json"
 
@@ -66,6 +66,18 @@ enum CMError: Error, LocalizedError {
     case message(String)
     var errorDescription: String? { if case .message(let s) = self { return s }; return nil }
 }
+// Only the charging observation is corrected; supply identity remains native.
+func applyingLiveCurrent(_ battery: Battery, milliamps: Double?, volts: Double?) -> Battery {
+    guard let milliamps, let volts, milliamps.isFinite, volts.isFinite,
+          abs(milliamps) <= 10000, (8...16).contains(volts) else { return battery }
+    var result = battery
+    result.amperage = milliamps; result.voltage = volts
+    // A small dead band prevents near-zero noise from being called charging.
+    if milliamps >= 100 { result.charging = true }
+    else if milliamps <= 50 { result.charging = false }
+    return result
+}
+
 enum PowerDisplayState: CaseIterable {
     case charging, external, battery, unavailable
     static func resolve(_ b: Battery?) -> PowerDisplayState {

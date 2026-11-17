@@ -9,7 +9,7 @@
 ![macOS](https://img.shields.io/badge/macOS-15%20%7C%2026-111827?logo=apple&logoColor=white)
 ![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-arm64-f97316)
 [![MIT License](https://img.shields.io/badge/license-MIT-22c55e)](LICENSE)
-[![Release](https://img.shields.io/badge/release-0.6.6-f97316)](https://github.com/AlanSune/Cellmori/releases/tag/v0.6.6)
+[![Release](https://img.shields.io/badge/release-0.6.7-007aff)](https://github.com/AlanSune/Cellmori/releases/tag/v0.6.7)
 
 [下载正式版 PKG](https://github.com/AlanSune/Cellmori/releases/latest) · [English](README.en.md) · [使用指南](docs/USAGE.md) · [反馈问题](https://github.com/AlanSune/Cellmori/issues)
 
@@ -30,13 +30,15 @@
 | 想及时升级 | 应用内检查正式版、查看说明、下载校验包并打开系统安装器 |
 | 不想反复输入密码 | 安装后台时授权，日常控制通过校验身份的 XPC 执行 |
 
-当前应用与后台均为 **0.6.6**。本次相对 v0.6.2 更新界面、充放电交接与可选保持唤醒；“放电期间保持唤醒（支持合盖）”默认关闭，完整合盖与睡眠恢复仍待进一步实机验证。采用 [MIT 许可证](LICENSE)，没有第三方包依赖。原生 SwiftUI / AppKit 界面，本地处理电池数据，无账户、无内置遥测上传；仅检查或下载更新时连接 GitHub。
+最新正式版为 **0.6.7**（build 26），应用与后台版本均为 0.6.7。本次以 v0.6.6 为基线，改进实时充电状态观测、操作反馈和原生界面；充放电策略保持原有逻辑。实时遥测修复已在 M1/macOS 15.8.2 完成安装与两轮充满一次/取消实测，其他验证边界见[实测记录](docs/VALIDATION.md)。采用 [MIT 许可证](LICENSE)，没有第三方包依赖。原生 SwiftUI / AppKit 界面，本地处理电池数据，无账户、无内置遥测上传；仅检查或下载更新时连接 GitHub。
 
 **macOS 26 已有 MacBook Pro（M4）用户实机验证。** 用户报告在 0.6.0 系列中“全部功能”均已验证可用；芯片为 M4；未提供系统小版本或逐项日志。这是该设备上的使用反馈，不表示所有 Mac 与固件均保证兼容。详见[兼容性与验证范围](docs/COMPATIBILITY.md)。
 
 ## 功能预览
 
-以下图片来自 0.6.6，由应用真实 SwiftUI 视图离屏渲染，标有“演示数据”，不包含个人电池记录，也不是 macOS 26 的实机截图。
+当前版本使用原生 macOS 侧栏、系统强调色与材质小窗，支持浅色和深色外观。
+
+以下图片来自 0.6.7，由应用真实 SwiftUI 视图离屏渲染，标有“演示数据”，不包含个人电池记录，也不是 macOS 26 的实机截图。
 
 ### 健康信息与趋势
 

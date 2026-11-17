@@ -16,3 +16,6 @@ int cm_control(int charging, int discharging, char *error, int capacity);
 int cm_restore(char *error, int capacity);
 // 0 = preparing to sleep, 1 = wake. Registration must succeed before policy runs.
 int cm_watch_power(void (*callback)(int));
+
+// Read-only fresh battery current/voltage; unsupported formats return failure.
+int cm_battery_current(double *milliamps, double *volts);

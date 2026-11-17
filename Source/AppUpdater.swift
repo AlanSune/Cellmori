@@ -95,7 +95,12 @@ struct AppUpdateView: View {
                 Spacer()
                 Button(updater.checking ? "检查中…" : "检查更新") { updater.check() }.disabled(updater.busy)
             }
-            Toggle("自动检查正式版（每天最多一次）", isOn: $updater.automaticallyCheck)
+            HStack {
+                Text("自动检查正式版（每天最多一次）")
+                Spacer()
+                Toggle("自动检查正式版", isOn: $updater.automaticallyCheck)
+                    .labelsHidden().toggleStyle(.switch).controlSize(.small)
+            }
             Text("默认开启，可随时关闭。启动时每天最多检查一次；只连接 GitHub，不上传电池数据。")
                 .font(.caption).foregroundStyle(.secondary)
             Text(updater.status).font(.callout)
@@ -113,7 +118,11 @@ struct AppUpdateView: View {
                 ScrollView { Text(update.notes).font(.caption).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
                     .frame(maxHeight: 140)
                 if updater.downloading {
-                    ProgressView(value: updater.progress)
+                    HStack {
+                        ProgressView(value: updater.progress)
+                        Text(updater.progress.formatted(.percent.precision(.fractionLength(0))))
+                            .font(.callout).monospacedDigit().frame(width: 42, alignment: .trailing)
+                    }
                     Button("取消下载") { updater.cancelDownload() }
                 } else if updater.downloaded != nil {
                     HStack {
@@ -124,8 +133,10 @@ struct AppUpdateView: View {
                     Button("下载更新") { updater.download() }.buttonStyle(.borderedProminent).disabled(updater.busy)
                 }
             }
-            Text("下载后核对 SHA-256，安装前再次校验。安装由 macOS 请求管理员授权，后台继续维护当前策略。系统可能要求确认安装包来源，应用不会跳过系统安全检查。")
-                .font(.caption).foregroundStyle(.secondary)
+            DisclosureGroup("安装与验证说明") {
+                Text("下载后核对 SHA-256，安装前再次校验。安装由 macOS 请求管理员授权，后台继续维护当前策略。系统可能要求确认安装包来源，应用不会跳过系统安全检查。")
+                    .font(.caption).foregroundStyle(.secondary).padding(.top, 4)
+            }.font(.caption)
             Link("打开 GitHub 发布页", destination: URL(string: UpdateValidation.repository + "/releases")!)
                 .font(.caption)
         }

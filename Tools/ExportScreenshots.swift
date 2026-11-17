@@ -69,6 +69,10 @@ import SwiftUI
             try render(Dashboard().environmentObject(model), size: CGSize(width: 1000, height: page == 1 ? 1040 : page == 3 ? 1120 : page == 0 ? 1120 : 1000),
                        path: output.appendingPathComponent(name + ".png"))
         }
+        try render(Dashboard().environmentObject(demoModel()), size: CGSize(width: 900, height: 780),
+                   path: output.appendingPathComponent("charge-control-compact.png"))
+        try render(Dashboard().environmentObject(demoModel()), size: CGSize(width: 900, height: 780),
+                   path: output.appendingPathComponent("charge-control-dark.png"), scheme: .dark)
         try render(MenuPopover().environmentObject(demoModel()), size: CGSize(width: 384, height: 610),
                    path: output.appendingPathComponent("menu-panel.png"))
         try render(MenuPopover().environmentObject(demoModel()), size: CGSize(width: 384, height: 610),

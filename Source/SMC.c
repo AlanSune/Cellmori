@@ -239,3 +239,17 @@ int cm_control(int charging, int discharging, char *error, int capacity) {
     if(r) {char ignored[256]={0}; cm_restore(ignored,sizeof(ignored));}
     return r;
 }
+
+// Read-only ARM64 telemetry. Strict types/ranges; never infer supply source.
+int cm_battery_current(double *milliamps, double *volts) {
+ io_connect_t c=0;if(connectSMC(&c))return -1;
+ Packet a={0},v={0};int r=readKey(c,"B0AC",&a);if(!r)r=readKey(c,"B0AV",&v);
+ if(!r && (a.info.size!=2 || a.info.type!=keyCode("si16") || v.info.size!=2 || v.info.type!=keyCode("ui16")))r=-2;
+ if(!r){
+  int16_t current=(int16_t)((uint16_t)a.bytes[0]|(uint16_t)a.bytes[1]<<8);
+  unsigned voltage=(unsigned)v.bytes[0]|(unsigned)v.bytes[1]<<8;
+  if(current < -10000 || current > 10000 || voltage < 8000 || voltage > 16000)r=-3;
+  else {*milliamps=current;*volts=voltage/1000.0;}
+ }
+ IOServiceClose(c);return r;
+}

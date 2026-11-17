@@ -121,7 +121,10 @@ import Darwin
         }
         if command == "status" {
             let e = JSONEncoder(); e.outputFormatting = .prettyPrinted
-            print(String(data: try e.encode(Battery.read()), encoding: .utf8)!); return
+            var battery = try Battery.read()
+            var current=0.0, voltage=0.0
+            if cm_battery_current(&current,&voltage)==0 { battery=applyingLiveCurrent(battery,milliamps:current,volts:voltage) }
+            print(String(data: try e.encode(battery), encoding: .utf8)!); return
         }
         guard geteuid() == 0 else { throw CMError.message("电源控制需要管理员权限，请从应用授权安装后台服务。") }
         guard ["configure", "tick", "reset", "prepare-sleep", "prepare-update", "firmware-test", "recover-sleep"].contains(command) else { throw CMError.message("未知命令") }
@@ -284,8 +287,16 @@ import Darwin
             if command == "configure" || previousMode != config.mode || previousThermal != config.thermalPaused {
                 record(config, event: command == "configure" ? "configure" : "transition", expected: firmwareSettings(for:config, discharging: decision.discharge))
             }
+            // Presentation observation only. Policy above uses the unchanged
+            // native sample; these read-only registers never command charging.
+            var observedBattery = (try? Battery.read()) ?? battery
+            var current=0.0, voltage=0.0
+            if cm_battery_current(&current,&voltage)==0 {
+                observedBattery=applyingLiveCurrent(observedBattery,milliamps:current,volts:voltage)
+            }
+            if physical>=0 { observedBattery.external = physical==1 }
             try encode(config, path: configurationPath)
-            try encode(ServiceState(configuration: config, battery: battery, message: decision.message,
+            try encode(ServiceState(configuration: config, battery: observedBattery, message: decision.message,
                                     chargeCommand: capabilities & 4 != 0 || config.adapterFallback == true ? nil : decision.charge, dischargeCommand: decision.discharge,
                                     sleepHoldActive: sleepHoldConfirmed && decision.discharge,
                                     firmwareExpected: config.mode != .system && config.firmwareOriginal != nil ? firmwareSettings(for:config, discharging: decision.discharge) : nil,

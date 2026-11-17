@@ -1,6 +1,6 @@
 # 隐私与本地数据
 
-核对版本：0.6.6。Cellmori 没有账户、内置分析 SDK 或自动遥测上传功能。电池监测和控制在本机进行。软件更新会按以下规则连接 GitHub。点击 Apple 说明链接会打开外部网站；GitHub、Apple 和操作系统自身的数据处理不属于本项目的本地数据承诺。
+核对版本：0.6.7。Cellmori 没有账户、内置分析 SDK 或自动遥测上传功能。电池监测和控制在本机进行。软件更新会按以下规则连接 GitHub。点击 Apple 说明链接会打开外部网站；GitHub、Apple 和操作系统自身的数据处理不属于本项目的本地数据承诺。
 
 ## 保存位置
 
@@ -10,7 +10,7 @@
 | 界面偏好 | 用户默认设置域 `io.cellmori.app`；包括 Dock 偏好等 |
 | 控制配置 | `/Library/Application Support/Cellmori/configuration.json`；策略、流程时间与原始固件快照 |
 | 状态与电池读数 | 同目录 `state.json`；后台心跳、PID、版本、模式和电池读数 |
-| 策略诊断 | 同目录 `policy-events.json`；最近 80 条切换、睡眠、唤醒、错误及固件上限读回记录，仅管理员可读，不自动上传 |
+| 策略诊断 | 同目录 `policy-events.json`；最近 80 条切换、睡眠、唤醒、错误、充电状态/供电来源变化及固件上限读回记录，仅管理员可读，不自动上传 |
 | 睡眠恢复记录 | 同目录 `sleep-recovery.json`；仅保持唤醒接管期间存在，保存原 SleepDisabled 标志与开始时间；恢复确认后删除，仅管理员可读 |
 | 通信身份 | 同目录 `client-identity.plist`；授权账户数字 UID、应用/后台代码哈希，不保存管理员密码 |
 | 固件检测结果 | 同目录 `firmware-access.json`（执行写权限验证后产生） |
