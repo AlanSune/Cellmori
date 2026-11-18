@@ -101,7 +101,6 @@ import Darwin
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
     }
     static func restoreManaged(_ config: Configuration) throws {
-        if config.adapterFallback == true { try adapter(false); return }
         if let original=config.firmwareOriginal {
             var errors:[String]=[]
             do { try setFirmware(original) } catch { errors.append(error.localizedDescription) }
@@ -151,10 +150,22 @@ import Darwin
                 throw CMError.message("配置损坏，已恢复供电，请重新设置")
             }
         } else { config = Configuration() }
+        do {
+            if try retireAdapterLimit(&config, restoreAdapter: { try adapter(false) }, releaseSleepHold: { try sleepHold.release() }) {
+                try encode(config, path: configurationPath)
+                try encode(ServiceState(configuration: config, battery: try? Battery.read(),
+                                        message: "已恢复 macOS 管理", dischargeCommand: false,
+                                        capabilities: Int(cm_capabilities())), path: statePath)
+            }
+        } catch {
+            let message = "恢复外接供电或睡眠设置失败，后台将重试"
+            try encode(ServiceState(configuration: config, message: message, error: error.localizedDescription), path: statePath)
+            throw CMError.message(message + ": " + error.localizedDescription)
+        }
         if command == "recover-sleep" {
             guard FileManager.default.fileExists(atPath: sleepRecoveryPath) else { return }
             if config.ownsHardware {
-                if config.firmwareOriginal != nil && config.adapterFallback != true && config.mode != .system {
+                if config.firmwareOriginal != nil && config.mode != .system {
                     _ = try protect(firmwareSleepSettings(for:config), discharge:false)
                 } else { try restoreManaged(config) }
             }
@@ -174,7 +185,7 @@ import Darwin
         if command == "prepare-sleep" || command == "prepare-update" {
             if config.ownsHardware {
                 do {
-                    if config.firmwareOriginal != nil && config.adapterFallback != true && config.mode != .system {
+                    if config.firmwareOriginal != nil && config.mode != .system {
                         // Keep a firmware ceiling while asleep instead of restoring an
                         // originally-disabled limit and allowing the battery to recharge.
                         _ = try protect(firmwareSleepSettings(for:config), discharge: false)
@@ -186,8 +197,8 @@ import Darwin
                     try encode(ServiceState(configuration: config, message: "恢复供电或睡眠设置失败，请检查状态", error: error.localizedDescription), path: statePath)
                     throw error
                 }
-                let message = command == "prepare-update" ? "正在更新后台，现有策略已保留" : config.firmwareOriginal != nil && config.adapterFallback != true && config.mode != .system ? "系统即将睡眠，固件保留 \(firmwareSleepSettings(for:config).upper)% 上限；唤醒后恢复流程" : "系统即将睡眠，已释放供电控制；唤醒后恢复策略"
-                try encode(ServiceState(configuration: config, battery: try? Battery.read(), message: message, chargeCommand: true, dischargeCommand: false, firmwareExpected: command == "prepare-sleep" && config.firmwareOriginal != nil && config.adapterFallback != true ? firmwareSleepSettings(for: config) : nil, firmwareObserved: try? readFirmware(), capabilities:Int(cm_capabilities())), path: statePath)
+                let message = command == "prepare-update" ? "正在更新后台，现有策略已保留" : config.firmwareOriginal != nil && config.mode != .system ? "系统即将睡眠，固件保留 \(firmwareSleepSettings(for:config).upper)% 上限；唤醒后恢复流程" : "系统即将睡眠，已释放供电控制；唤醒后恢复策略"
+                try encode(ServiceState(configuration: config, battery: try? Battery.read(), message: message, chargeCommand: true, dischargeCommand: false, firmwareExpected: command == "prepare-sleep" && config.firmwareOriginal != nil ? firmwareSleepSettings(for: config) : nil, firmwareObserved: try? readFirmware(), capabilities:Int(cm_capabilities())), path: statePath)
             }
             try sleepHold.release()
             return
@@ -201,7 +212,6 @@ import Darwin
                 try sleepHold.release()
                 config.ownsHardware = false
                 config.firmwareOriginal = nil
-                config.adapterFallback = nil
                 try encode(config, path: configurationPath)
                 try encode(ServiceState(configuration: config, battery: try? Battery.read(), message: "已解除所有控制，恢复系统管理", capabilities: Int(cm_capabilities())), path: statePath)
             } catch {
@@ -211,18 +221,13 @@ import Darwin
             return
         }
         if command == "configure" {
-            guard (args.count == 5 || args.count == 6), args.count == 5 || ["0", "1"].contains(args[5]), let mode = Mode(rawValue: args[1]), let target = Int(args[2]),
-                  let temperature = Double(args[3]), let discharge = Int(args[4]),
-                  (40...100).contains(target), (35...42).contains(temperature), (20...90).contains(discharge) else {
-                throw CMError.message("参数无效：上限 40–100，温控 35–42，放电目标 20–90")
+            guard permittedControlRequest(args), let mode = Mode(rawValue: args[1]),
+                  let target = Int(args[2]), let temperature = Double(args[3]), let discharge = Int(args[4]) else {
+                throw CMError.message("参数无效：上限 40–100，温控 35–42，放电目标 20–90，回充差值 1–20")
             }
             // Validate sensor and key capability before persisting a new active policy.
             _ = try Battery.read()
-            if mode == .adapterLimit {
-                guard cm_capabilities() & 10 == 10, cm_physical_power() >= 0 else {
-                    throw CMError.message("适配器控制或物理电源检测不可用，不能启用兼容模式")
-                }
-            } else if mode != .system {
+            if mode != .system {
                 var buffer = [CChar](repeating: 0, count: 1024)
                 guard cm_probe(&buffer, Int32(buffer.count)) == 0 else {
                     throw CMError.message("本机充电接口未通过检测：" + String(cString: buffer))
@@ -231,18 +236,12 @@ import Darwin
                     throw CMError.message("本机不支持接电放电，不能启动该流程")
                 }
             }
-            if config.adapterFallback == true && mode != .adapterLimit && mode != .system {
-                throw CMError.message("请先恢复系统管理，再使用普通限充、临时充满或校准。兼容模式不支持这些临时流程。")
-            }
-            if mode == .adapterLimit && config.adapterFallback != true && config.ownsHardware {
-                try restoreManaged(config); config.ownsHardware=false; config.firmwareOriginal=nil
-            }
-            if mode == .adapterLimit { config.adapterFallback=true }
             config.mode = mode; config.target = target; config.temperatureLimit = temperature
             config.dischargeTarget = discharge; config.started = Date(); config.stage = "charge"
             config.stageStarted = Date(); config.holdingSeconds = 0; config.lastTick = nil
             config.chargeAllowed = true; config.thermalPaused = false
-            config.dischargeKeepAwake = args.count == 6 && args[5] == "1"
+            config.dischargeKeepAwake = args.count >= 6 && args[5] == "1"
+            if args.count == 7 { config.rechargeGap = Int(args[6]) }
             try encode(config, path: configurationPath)
         }
         let previousMode = config.mode
@@ -250,11 +249,7 @@ import Darwin
         do {
             var battery = try Battery.read()
             let physical=cm_physical_power()
-            if config.adapterFallback == true {
-                guard physical>=0 else { throw CMError.message("物理电源检测失败，正在退出兼容模式并恢复供电") }
-            }
-            // Adapter cut can alter the smart-battery AC flags; prefer independent physical
-            // presence for all control flows, not only compatibility mode.
+            // Adapter cut can change the battery's AC flag during active discharge.
             if physical>=0 { battery.external = physical==1 }
             let now = Date()
             let wantsSleepHold = needsDischargeSleepHold(config, battery:battery, now:now)
@@ -262,23 +257,20 @@ import Darwin
             let sleepHoldConfirmed = wantsSleepHold ? try sleepHold.acquire() : false
             var decision = evaluate(&config, battery: battery, now:now, sleepHoldConfirmed:sleepHoldConfirmed)
             let capabilities=cm_capabilities()
-            if config.mode != .system && config.firmwareOriginal != nil && config.adapterFallback != true && capabilities & 4 == 0 {
+            if config.mode != .system && config.firmwareOriginal != nil && capabilities & 4 == 0 {
                 throw CMError.message("固件接口暂时不可用，保留上限配置等待重试")
             }
             if config.mode == .system {
                 if config.ownsHardware { try restoreManaged(config); config.ownsHardware = false }
-                config.firmwareOriginal=nil;config.adapterFallback=nil
+                config.firmwareOriginal=nil
             } else {
-                if config.adapterFallback != true && capabilities & 4 != 0 && config.firmwareOriginal == nil { config.firmwareOriginal=try readFirmware() }
+                if capabilities & 4 != 0 && config.firmwareOriginal == nil { config.firmwareOriginal=try readFirmware() }
                 config.ownsHardware = true
                 try encode(config, path: configurationPath)
-                if config.adapterFallback == true {
-                    try adapter(decision.discharge)
-                    if config.thermalPaused { decision.message="兼容流程因温度暂停，已恢复外接供电；系统继续负责温控" }
-                } else if capabilities & 4 != 0 {
+                if capabilities & 4 != 0 {
                     _ = try protect(firmwareSettings(for:config, discharging: decision.discharge), discharge: decision.discharge)
                     if config.thermalPaused { decision.message="温度保护：流程已暂停，保留日常固件上限；macOS 负责温控" }
-                    else if config.mode == .limit { decision.message="固件限充 \(config.target-5)%–\(config.target)%；充放电由固件决定" }
+                    else if config.mode == .limit { decision.message="固件限充 \(config.rechargeAt)%–\(config.target)%；充放电由固件决定" }
                     decision.charge=true // Firmware mode has no direct charge-gate command.
                 } else { try hardware(decision) }
             }
@@ -297,7 +289,7 @@ import Darwin
             if physical>=0 { observedBattery.external = physical==1 }
             try encode(config, path: configurationPath)
             try encode(ServiceState(configuration: config, battery: observedBattery, message: decision.message,
-                                    chargeCommand: capabilities & 4 != 0 || config.adapterFallback == true ? nil : decision.charge, dischargeCommand: decision.discharge,
+                                    chargeCommand: capabilities & 4 != 0 ? nil : decision.charge, dischargeCommand: decision.discharge,
                                     sleepHoldActive: sleepHoldConfirmed && decision.discharge,
                                     firmwareExpected: config.mode != .system && config.firmwareOriginal != nil ? firmwareSettings(for:config, discharging: decision.discharge) : nil,
                                     firmwareObserved: try? readFirmware(), capabilities: Int(cm_capabilities())), path: statePath)
@@ -308,7 +300,7 @@ import Darwin
             var recoveryError: String? = nil
             do {
                 if config.ownsHardware {
-                    if config.mode != .system && config.firmwareOriginal != nil && config.adapterFallback != true {
+                    if config.mode != .system && config.firmwareOriginal != nil {
                         _ = try protect(firmwareSettings(for:config), discharge: false)
                     } else { try restoreManaged(config) }
                 }

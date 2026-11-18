@@ -11,4 +11,4 @@ xcrun swiftc -D SCREENSHOT_EXPORT -O -module-cache-path "$BUILD/module-cache" \
   "$ROOT/Source/Shared.swift" "$ROOT/Source/ControlChannel.swift" "$ROOT/Source/ServiceStatus.swift" \
   "$ROOT/Source/MenuBarIcon.swift" "$ROOT/Source/MenuPanelNavigation.swift" "$ROOT/Source/UpdateService.swift" "$ROOT/Source/AppUpdater.swift" "$ROOT/Source/App.swift" \
   "$ROOT/Tools/ExportScreenshots.swift" "$BUILD/SMC.o" -o "$BUILD/export-screenshots"
-"$BUILD/export-screenshots" "$ROOT/docs/images"
+"$BUILD/export-screenshots" "${1:-$ROOT/docs/images}"

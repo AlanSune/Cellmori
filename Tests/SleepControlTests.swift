@@ -120,8 +120,8 @@ private final class SimulatedSystem {
         check(!needsDischargeSleepHold(c,battery:b,now:now),"stop action releases hold")
         c.mode = .system
         check(!needsDischargeSleepHold(c,battery:b,now:now),"reset releases hold")
-        c.mode = .adapterLimit
-        check(!needsDischargeSleepHold(c,battery:b,now:now),"compatibility mode never holds sleep")
+        c.mode = .retiredAdapterLimit
+        check(!needsDischargeSleepHold(c,battery:b,now:now),"retired configuration never holds sleep")
         c.mode = .calibrate;c.stage = "charge"
         check(!needsDischargeSleepHold(c,battery:b,now:now),"calibration charge follows normal sleep behavior")
         c.stage = "discharge";c.stageStarted = now

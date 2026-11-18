@@ -35,7 +35,7 @@ import SwiftUI
         guard Date().timeIntervalSince(previous) >= 24 * 3600 else { return }
         check(automatic: true)
     }
-    func check(automatic: Bool = false) {
+    func check(automatic: Bool = false, showErrorAlert: Bool = true) {
         guard !preview, !busy else { return }
         checking = true; status = "正在检查 GitHub 正式版…"
         if automatic { preferences.set(Date(), forKey: "lastAutomaticUpdateAttempt") }
@@ -49,7 +49,7 @@ import SwiftUI
                 status = available.map { "发现新版本 \($0.version)" } ?? "目前没有比 \(appVersion) 更新的正式版本。"
             } catch {
                 status = "检查未完成，可稍后重试。"
-                if !automatic { onError?(error.localizedDescription) }
+                if !automatic && showErrorAlert { onError?(error.localizedDescription) }
             }
         }
     }
@@ -143,16 +143,43 @@ struct AppUpdateView: View {
     }
 }
 
-struct UpdateMenuButton: View {
+struct MenuUpdateControls<Actions: View, Exit: View>: View {
     @ObservedObject var updater: AppUpdater
-    let open: () -> Void
+    @State private var checkedFromMenu = false
+    let openDetails: () -> Void
+    @ViewBuilder var actions: () -> Actions
+    @ViewBuilder var exit: () -> Exit
+
     var body: some View {
-        Button {
-            open()
-            if updater.available == nil { updater.check() }
-        } label: {
-            Label(updater.available.map { "发现新版本 \($0.version)" } ?? "检查更新…",
-                  systemImage: updater.available == nil ? "arrow.clockwise" : "arrow.down.circle.fill")
-        }.font(.caption)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                actions()
+                Spacer()
+                Button {
+                    checkedFromMenu = true
+                    updater.check(showErrorAlert: false)
+                } label: {
+                    if updater.checking {
+                        HStack(spacing: 4) {
+                            ProgressView().controlSize(.mini).accessibilityHidden(true)
+                            Text("正在检查…")
+                        }
+                    } else {
+                        Label("检查更新", systemImage: "arrow.clockwise")
+                    }
+                }
+                .disabled(updater.busy)
+                Spacer()
+                exit()
+            }
+            if let update = updater.available {
+                Button(action: openDetails) {
+                    Label("查看新版 \(update.version)", systemImage: "arrow.down.circle")
+                }
+            }
+            if checkedFromMenu && !updater.busy {
+                Text(updater.status).foregroundStyle(.secondary)
+            }
+        }.font(.caption).buttonStyle(.borderless)
     }
 }

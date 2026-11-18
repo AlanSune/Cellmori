@@ -8,6 +8,12 @@ import Foundation
         count += 1
     }
     static func main() throws {
+        check(rechargeThresholdRange(upper: 40) == 20...39, "lower slider bounds at minimum upper limit")
+        check(rechargeThresholdRange(upper: 80) == 60...79, "lower slider bounds follow regular upper limit")
+        check(rechargeThresholdRange(upper: 100) == 80...99, "lower slider bounds at maximum upper limit")
+        check(rechargeThreshold(75, upper: 90) == 75, "moving upper handle preserves valid lower threshold")
+        check(rechargeThreshold(75, upper: 70) == 69, "moving upper handle below lower clamps to one-point gap")
+        check(rechargeThreshold(75, upper: 100) == 80, "moving upper handle above lower clamps to twenty-point gap")
         let now = Date()
         var b = Battery(percent: 81, temperature: 27, cycles: 88, design: 5103, nominal: 4377,
                         voltage: 12, amperage: -500, external: true, charging: false, full: false, failure: 0, lidClosed: false)
@@ -190,26 +196,36 @@ import Foundation
         b.external=true
         check(PowerDisplayState.resolve(b) == .external, "negative current does not override external fallback")
         check(PowerDisplayState.resolve(nil) == .unavailable, "missing telemetry has no false power state")
-        c=Configuration();c.mode = .adapterLimit;c.adapterFallback=true
-        b.external=true;b.lidClosed=false;b.failure=0;b.temperature=25;b.percent=81
-        check(evaluate(&c,battery:b,now:now).discharge, "adapter fallback cuts wall power at upper target")
-        b.percent=77
-        check(evaluate(&c,battery:b,now:now).discharge, "adapter fallback keeps hysteresis state")
-        b.percent=75
-        check(!evaluate(&c,battery:b,now:now).discharge && c.chargeAllowed, "adapter fallback restores wall power at lower target")
-        b.percent=81;b.lidClosed=true
-        check(!evaluate(&c,battery:b,now:now).discharge, "adapter fallback restores supply when lid closes")
-        b.lidClosed=nil
-        check(!evaluate(&c,battery:b,now:now).discharge, "adapter fallback unknown lid fails safe")
-        b.lidClosed=false;b.external=false
-        check(!evaluate(&c,battery:b,now:now).discharge, "adapter fallback physical unplug releases adapter")
-        b.external=true;b.temperature=42
-        check(!evaluate(&c,battery:b,now:now).discharge, "adapter fallback thermal pause restores power")
-        b.temperature=25;b.percent=19
-        check(!evaluate(&c,battery:b,now:now).discharge && c.chargeAllowed, "adapter fallback low battery restores supply")
-        let old=Data(#"{"mode":"system","target":80,"dischargeTarget":50,"temperatureLimit":40,"started":0,"stage":"charge","stageStarted":0,"holdingSeconds":0,"chargeAllowed":true,"thermalPaused":false,"ownsHardware":false}"#.utf8)
-        let migrated=try JSONDecoder().decode(Configuration.self,from:old)
-        check(migrated.adapterFallback == nil, "existing configuration never opts into adapter fallback")
+        let old = Data(#"{"mode":"adapterLimit","adapterFallback":true,"target":80,"dischargeTarget":50,"temperatureLimit":40,"started":0,"stage":"charge","stageStarted":0,"holdingSeconds":0,"chargeAllowed":false,"thermalPaused":false,"ownsHardware":true}"#.utf8)
+        c = try JSONDecoder().decode(Configuration.self, from: old)
+        check(c.effectiveRechargeGap == 5, "legacy configuration defaults to five-point recharge gap")
+        var recovery: [String] = []
+        do {
+            _ = try retireAdapterLimit(&c, restoreAdapter: { throw CMError.message("failed") }, releaseSleepHold: { recovery.append("sleep") })
+            fatalError("expected adapter restoration to fail")
+        } catch {
+            check(c.mode == .retiredAdapterLimit && c.ownsHardware && recovery.isEmpty, "failed restoration keeps intent for retry")
+        }
+        let migrated = try retireAdapterLimit(&c, restoreAdapter: { recovery.append("adapter") }, releaseSleepHold: { recovery.append("sleep") })
+        check(migrated, "legacy mode migrated")
+        check(recovery == ["adapter", "sleep"] && c.mode == .system && !c.ownsHardware && c.adapterFallback == nil && c.target == 80, "restore power before sleep and preserve saved target")
+        let remigrated = try retireAdapterLimit(&c, restoreAdapter: { recovery.append("unexpected") }, releaseSleepHold: { recovery.append("unexpected") })
+        check(!remigrated, "normal configurations skip migration")
+        c.mode = .limit; c.rechargeGap = 10; c.chargeAllowed = true
+        b.external = true; b.lidClosed = false; b.failure = 0; b.temperature = 25; b.percent = 80
+        check(!evaluate(&c, battery: b, now: now).charge, "custom range stops at upper limit")
+        b.percent = 75
+        check(!evaluate(&c, battery: b, now: now).charge, "custom range stays paused above lower limit")
+        b.percent = 70
+        check(evaluate(&c, battery: b, now: now).charge, "custom range resumes at lower limit")
+        check(firmwareSettings(for: c).lower == 70 && firmwareSleepSettings(for: c).lower == 70, "custom range reaches firmware and sleep handoff")
+        check(limitSettingsApplied(c, target: 80, temperature: 40, rechargeGap: 10) &&
+              !limitSettingsApplied(c, target: 80, temperature: 40), "editing only the gap leaves a pending change")
+        c.mode = .full
+        check(firmwareSettings(for: c).lower == 95 && c.rechargeAt == 70, "temporary full leaves saved range intact")
+        check(permittedControlRequest(["configure", "limit", "80", "40", "50", "0", "10"]), "custom range accepted")
+        check(!permittedControlRequest(["configure", "limit", "80", "40", "50", "0", "21"]), "oversized recharge gap rejected")
+        check(!permittedControlRequest(["configure", "adapterLimit", "80", "40", "50"]), "retired mode rejected")
         b.charging=false;b.external=false;b.amperage=1500
         check(PowerDisplayState.resolve(b) == .battery, "positive current alone does not determine supply source")
         b.charging=true;b.amperage = -500

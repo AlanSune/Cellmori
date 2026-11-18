@@ -19,6 +19,8 @@ struct Sample: Codable, Identifiable {
     @Published var battery: Battery?
     @Published var state: ServiceState?
     @Published var target: Double = 80
+    @Published var rechargeGap = defaultRechargeGap
+    var rechargeAt: Int { Int(target) - rechargeGap }
     @Published var dischargeTarget: Double = 50
     @Published var dischargeKeepAwake = UserDefaults.standard.bool(forKey: "dischargeKeepAwake") {
         didSet { if !isPreview { UserDefaults.standard.set(dischargeKeepAwake, forKey: "dischargeKeepAwake") } }
@@ -61,17 +63,19 @@ struct Sample: Codable, Identifiable {
     private let historyDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Cellmori")
     var installed: Bool { isPreview || FileManager.default.isExecutableFile(atPath: helperPath) }
     var live: Bool { state.map { Date().timeIntervalSince($0.updated) < 65 } ?? false }
-    var adapterMode: Bool { state?.configuration.mode == .adapterLimit && state?.configuration.adapterFallback == true }
-    var firmwareBackend: Bool { !adapterMode && (state?.capabilities ?? 0) & 4 != 0 }
-    var chargeAvailable: Bool { installed && live && service.healthy && ((state?.capabilities ?? 0) & 5 != 0 || adapterMode && (state?.capabilities ?? 0) & 10 == 10) }
-    var fullAvailable: Bool { chargeAvailable && !adapterMode }
-    var dischargeAvailable: Bool { fullAvailable && (state?.capabilities ?? 0) & 2 != 0 }
-    var canEnableAdapterMode: Bool {
-        service.healthy && state?.error == nil && service.state?.helperVersion == expectedHelperVersion && (state?.capabilities ?? 0) & 10 == 10 && (state?.capabilities ?? 0) & 5 == 0
+    var firmwareBackend: Bool { (state?.capabilities ?? 0) & 4 != 0 }
+    var chargeAvailable: Bool {
+        installed && live && service.healthy && state?.helperVersion == expectedHelperVersion &&
+            state?.configuration.mode != .retiredAdapterLimit && (state?.capabilities ?? 0) & 5 != 0
     }
+    var fullAvailable: Bool { chargeAvailable }
+    var dischargeAvailable: Bool { fullAvailable && (state?.capabilities ?? 0) & 2 != 0 }
     var temporaryFlow: Bool { state.map { [.full, .discharge, .calibrate].contains($0.configuration.mode) } ?? false }
-    var limitApplied: Bool { live && state?.error == nil && limitSettingsApplied(state?.configuration, target: Int(target), temperature: temperatureLimit) }
-    var limitButtonTitle: String { temporaryFlow ? "请先停止临时流程" : limitApplied ? "已应用" : "应用上限" }
+    var limitApplied: Bool {
+        live && state?.error == nil && limitSettingsApplied(
+            state?.configuration, target: Int(target), temperature: temperatureLimit, rechargeGap: rechargeGap
+        )
+    }
     var activeFlowTitle: String { state?.configuration.mode.title ?? "临时流程" }
     var stopFlowTitle: String {
         switch state?.configuration.mode {
@@ -79,10 +83,6 @@ struct Sample: Codable, Identifiable {
         case .full: return "取消充满一次"
         default: return "停止校准"
         }
-    }
-    var nativeLimitEligible: Bool {
-        let os=ProcessInfo.processInfo.operatingSystemVersion
-        return os.majorVersion>26 || os.majorVersion==26 && os.minorVersion>=4
     }
     var status: String {
         guard installed else { return "只读监测 · 尚未安装后台服务" }
@@ -103,6 +103,7 @@ struct Sample: Codable, Identifiable {
         isPreview = preview
         updates = AppUpdater(preview: preview)
         if preview { return }
+
         updates.onError = { [weak self] message in self?.error = message }
         updates.checkAutomaticallyIfDue()
         samples = (try? decode([Sample].self, path: historyDirectory.appendingPathComponent("history.json").path)) ?? []
@@ -177,7 +178,7 @@ struct Sample: Codable, Identifiable {
             if lastBackendError != issue { lastBackendError = issue; error = issue }
         } else if state?.error == nil { lastBackendError = nil }
         if !loadedSettings, let c = state?.configuration {
-            target = Double(c.target); dischargeTarget = Double(c.dischargeTarget); temperatureLimit = c.temperatureLimit
+            target = Double(c.target); rechargeGap = c.effectiveRechargeGap; dischargeTarget = Double(c.dischargeTarget); temperatureLimit = c.temperatureLimit
             if let keepAwake = c.dischargeKeepAwake, temporaryFlow || UserDefaults.standard.object(forKey:"dischargeKeepAwake") == nil {
                 dischargeKeepAwake = keepAwake
             }
@@ -298,27 +299,17 @@ struct Sample: Codable, Identifiable {
         guard state?.helperVersion == expectedHelperVersion else {
             error = "请先更新后台服务，再应用新版控制策略。"; selectedPage = 2; return
         }
-        let effective = mode == .limit && adapterMode ? Mode.adapterLimit : mode
-        if effective == .adapterLimit && service.state?.helperVersion != expectedHelperVersion {
-            error="请先更新后台服务，才能使用适配器兼容模式。";selectedPage=2;return
-        }
         guard !temporaryFlow else { error = "请先停止当前临时流程，再开始新的操作。"; return }
         // Starting a temporary flow must preserve the applied daily limit, not an unsaved draft.
         let saved = state?.configuration
         let dailyTarget = [.full, .discharge, .calibrate].contains(mode) ? saved?.target ?? Int(target) : Int(target)
         let thermal = [.full, .discharge, .calibrate].contains(mode) ? saved?.temperatureLimit ?? temperatureLimit : temperatureLimit
-        admin(["configure", effective.rawValue, String(dailyTarget), String(Int(thermal)), String(Int(dischargeTarget)), dischargeKeepAwake ? "1" : "0"])
+        let gap = mode == .limit ? rechargeGap : saved?.effectiveRechargeGap ?? rechargeGap
+        admin(["configure", mode.rawValue, String(dailyTarget), String(Int(thermal)), String(Int(dischargeTarget)), dischargeKeepAwake ? "1" : "0", String(gap)])
     }
     func stopTemporaryFlow() {
         guard temporaryFlow, let c = state?.configuration, service.healthy else { return }
-        admin(["configure", Mode.limit.rawValue, String(c.target), String(Int(c.temperatureLimit)), String(c.dischargeTarget), c.dischargeKeepAwake == true ? "1" : "0"])
-    }
-    func enableAdapterMode() {
-        guard canEnableAdapterMode else { error="当前不满足适配器兼容模式条件：需要新版后台、适配器控制和物理电源检测，且普通充电接口不可用。";return }
-        let alert=NSAlert();alert.alertStyle = .warning;alert.messageText="启用适配器兼容限充？"
-        alert.informativeText="电量达到 \(Int(target))% 时切换为电池供电，降至 \(Int(target)-5)% 时恢复外接供电。\n\n这会造成电量往返变化，仅在开盖且系统清醒时维持；睡眠和合盖时恢复外接供电，可能充过上限。临时充满、手动放电和校准在此模式下不可用。系统原有充电限制仍可能生效。\n\n不会自动启用此模式，可随时恢复系统管理退出。"
-        alert.addButton(withTitle:"启用兼容模式");alert.addButton(withTitle:"取消")
-        if alert.runModal() == .alertFirstButtonReturn { apply(.adapterLimit) }
+        admin(["configure", Mode.limit.rawValue, String(c.target), String(Int(c.temperatureLimit)), String(c.dischargeTarget), c.dischargeKeepAwake == true ? "1" : "0", String(c.effectiveRechargeGap)])
     }
     func readDeviceSummary() {
         Task {
@@ -465,14 +456,129 @@ private struct SoftButtonSurface: View {
     }
 }
 
-struct AppliedLimitStatus: View {
-    var target: Int
+struct ChargeRangeEditor: View {
+    @EnvironmentObject var model: Model
+    @Environment(\.isEnabled) private var enabled
+
+    private enum Endpoint: Hashable { case lower, upper }
+    @FocusState private var focused: Endpoint?
+    @State private var dragging: Endpoint?
+    @State private var lowerAtDragStart: Int?
+
+    private let scale = 20...100
+    private let inset: CGFloat = 11
+    private var upper: Int { Int(model.target) }
+    private var lower: Int { model.rechargeAt }
+
+    var body: some View {
+        VStack(spacing: 6) {
+            HStack {
+                endpointLabel("恢复充电", percent: lower, alignment: .leading)
+                Spacer(minLength: 12)
+                endpointLabel("充电上限", percent: upper, alignment: .trailing)
+            }
+            .accessibilityHidden(true)
+            GeometryReader { geometry in
+                let width = max(1, geometry.size.width - 2 * inset)
+                let left = position(lower, width: width)
+                let right = position(upper, width: width)
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.primary.opacity(0.10))
+                        .frame(width: width, height: 5).offset(x: inset)
+                    Capsule().fill(cellmoriAccent)
+                        .frame(width: max(1, right - left), height: 5).offset(x: left)
+                    thumb(.lower, x: left)
+                    thumb(.upper, x: right)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance: 0)
+                    .onChanged { change in
+                        guard enabled, !model.busy, !model.temporaryFlow else { return }
+                        if dragging == nil {
+                            let start = change.startLocation.x
+                            dragging = abs(start - left) <= abs(start - right) ? .lower : .upper
+                            lowerAtDragStart = lower
+                            focused = dragging
+                        }
+                        if let dragging {
+                            let fraction = min(1, max(0, (change.location.x - inset) / width))
+                            let percent = scale.lowerBound + Int((fraction * Double(scale.upperBound - scale.lowerBound)).rounded())
+                            set(dragging, to: percent)
+                        }
+                    }
+                    .onEnded { _ in dragging = nil; lowerAtDragStart = nil })
+            }
+            .frame(height: 26)
+            .accessibilityRepresentation {
+                VStack {
+                    Slider(value: Binding(get: { Double(lower) }, set: { set(.lower, to: Int($0.rounded())) }),
+                           in: Double(rechargeThresholdRange(upper: upper).lowerBound)...Double(upper - 1), step: 1)
+                        .accessibilityLabel("恢复充电")
+                        .accessibilityValue("\(lower)%")
+                    Slider(value: Binding(get: { Double(upper) }, set: { set(.upper, to: Int($0.rounded())) }),
+                           in: 40...100, step: 1)
+                        .accessibilityLabel("充电上限")
+                        .accessibilityValue("\(upper)%")
+                }
+            }
+        }
+        .disabled(model.busy || model.temporaryFlow)
+    }
+
+    private func endpointLabel(_ title: String, percent: Int, alignment: HorizontalAlignment) -> some View {
+        VStack(alignment: alignment, spacing: 4) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text("\(percent)%").font(.system(size: 22, weight: .semibold)).monospacedDigit()
+        }
+    }
+
+    private func position(_ percent: Int, width: CGFloat) -> CGFloat {
+        inset + width * Double(percent - scale.lowerBound) / Double(scale.upperBound - scale.lowerBound)
+    }
+
+    private func thumb(_ endpoint: Endpoint, x: CGFloat) -> some View {
+        Circle().fill(Color(nsColor: .controlBackgroundColor))
+            .overlay(Circle().strokeBorder(cellmoriAccent, lineWidth: focused == endpoint ? 3 : 1.5))
+            .frame(width: 17, height: 17)
+            .offset(x: x - 8.5)
+            .focusable()
+            .focused($focused, equals: endpoint)
+            .focusEffectDisabled()
+            .onKeyPress(.leftArrow) { adjust(endpoint, by: -1) }
+            .onKeyPress(.rightArrow) { adjust(endpoint, by: 1) }
+    }
+
+    private func adjust(_ endpoint: Endpoint, by amount: Int) -> KeyPress.Result {
+        set(endpoint, to: (endpoint == .lower ? lower : upper) + amount)
+        return .handled
+    }
+
+    private func set(_ endpoint: Endpoint, to percent: Int) {
+        if endpoint == .lower {
+            model.rechargeGap = upper - rechargeThreshold(percent, upper: upper)
+        } else {
+            let newUpper = min(100, max(40, percent))
+            let newLower = rechargeThreshold(lowerAtDragStart ?? lower, upper: newUpper)
+            model.target = Double(newUpper)
+            model.rechargeGap = newUpper - newLower
+        }
+    }
+}
+
+struct ChargeRangeStatus: View {
+    let lower: Int
+    let upper: Int
+    let applied: Bool
+
     var body: some View {
         Label {
-            Text("已生效 · \(target)% 上限").foregroundStyle(.primary)
+            Text("\(lower)%–\(upper)% · \(applied ? "已生效" : "待应用")")
+                .foregroundStyle(applied ? .primary : .secondary)
         } icon: {
-            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-        }.font(.system(size: 12, weight: .medium)).accessibilityElement(children: .combine)
+            Image(systemName: applied ? "checkmark.circle.fill" : "circle.dashed")
+                .foregroundStyle(applied ? Color.green : .secondary)
+        }.font(.system(size: 12, weight: .medium))
     }
 }
 
@@ -530,11 +636,10 @@ struct ServiceBadge: View {
 
 struct Dashboard: View {
     @EnvironmentObject var model: Model
-    @State private var targetText = "80"
     @State private var showFiles = false
     @State private var showDiagnostics = false
     private let teal = cellmoriAccent
-    private let titles = ["充电控制", "健康与趋势", "后台服务", "偏好设置", "兼容性"]
+    private let titles = ["充电控制", "健康与趋势", "后台服务", "偏好设置", "设备支持"]
     private let symbols = ["battery.75percent", "heart.text.square", "gearshape.2", "slider.horizontal.3", "checkmark.shield"]
     var body: some View {
         NavigationSplitView {
@@ -600,8 +705,7 @@ struct Dashboard: View {
         .navigationSplitViewStyle(.balanced)
         .frame(minWidth: 800, idealWidth: 900, minHeight: 680, idealHeight: 780)
         .background(Color(nsColor: .windowBackgroundColor)).tint(cellmoriAccent)
-        .onAppear { targetText = String(Int(model.target)); model.prepareToOpenPanel() }
-        .onChange(of: model.target) { _, value in targetText = String(Int(value)) }
+        .onAppear { model.prepareToOpenPanel() }
     }
     private func sidebarItem(_ index: Int) -> some View {
         Label {
@@ -617,17 +721,9 @@ struct Dashboard: View {
         case 1: return "了解电池状态与使用趋势"
         case 2: return "确认服务身份、安装与运行状态"
         case 3: return "调整电池养护和启动选项"
-        default: return "macOS 26 接口诊断与可选兼容方案"
+        default: return "查看本机充电功能、系统信息与诊断"
         }
     }
-    func validateTarget() -> Bool {
-        guard let value = Int(targetText), (40...100).contains(value) else {
-            model.error = "请输入 40 到 100 之间的整数作为充电上限。"
-            targetText = String(Int(model.target)); return false
-        }
-        model.target = Double(value); return true
-    }
-    var draftLimitApplied: Bool { Int(targetText) == Int(model.target) && model.limitApplied }
     var controls: some View {
         VStack(spacing: 16) {
             Card(title: "") {
@@ -656,37 +752,24 @@ struct Dashboard: View {
                     }
                 }
             }
-            Card(title: "") {
-                HStack(alignment: .firstTextBaseline) {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Label("充电上限", systemImage: "shield.lefthalf.filled").font(.system(size: 14, weight: .semibold))
-                        Text("回充范围 \(Int(model.target)-5)%–\(Int(model.target))%").font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    TextField("上限", text: $targetText).textFieldStyle(.plain).multilineTextAlignment(.trailing)
-                        .font(.system(size: 36, weight: .medium)).frame(width: 86)
-                        .accessibilityLabel("充电上限百分比").onSubmit { _ = validateTarget() }
-                    Text("%").font(.title2).foregroundStyle(.secondary)
-                }
-                Slider(value: wholeNumber($model.target), in: 40...100).accessibilityLabel("充电上限")
+            Card(title: "日常充电范围") {
+                ChargeRangeEditor()
                 HStack {
-                    ForEach([60, 80, 90, 100], id: \.self) { n in
-                        Button("\(n)%") { model.target = Double(n) }.font(.system(size: 12, weight: .medium)).buttonStyle(SoftButtonStyle(selected: Int(model.target) == n))
-                            .accessibilityValue(Int(model.target) == n ? "已选中" : "未选中")
+                    if !model.temporaryFlow {
+                        ChargeRangeStatus(lower: model.rechargeAt, upper: Int(model.target), applied: model.limitApplied)
                     }
                     Spacer()
                     if model.busy {
                         HStack(spacing: 6) { ProgressView().controlSize(.small); Text("正在提交…").font(.caption) }
                     } else if model.temporaryFlow {
                         Text("临时流程进行中").font(.caption).foregroundStyle(.secondary)
-                    } else if draftLimitApplied {
-                        AppliedLimitStatus(target: Int(model.target))
-                    } else {
-                        Button("应用上限") { if validateTarget() { model.apply(.limit) } }
-                            .buttonStyle(.borderedProminent).disabled(!model.chargeAvailable)
+                    } else if !model.limitApplied {
+                        Button("应用充电范围") { model.apply(.limit) }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(!model.chargeAvailable)
                     }
                 }
-                Text(model.adapterMode ? "达到上限切换为电池供电，降至下限恢复外接供电。睡眠、合盖时暂停，可能超出上限。" : model.firmwareBackend ? "固件决定实际充放电；高于上限时可能自动使用电池降至目标。" : "达到上限后暂停，低于回充下限后恢复充电。")
+                Text(model.firmwareBackend ? "固件决定实际充放电；高于上限时可能自动使用电池降至目标。" : "达到上限后暂停，低于回充下限后恢复充电。")
                     .font(.caption).foregroundStyle(.secondary)
                 if !model.installed {
                     Divider()
@@ -903,61 +986,67 @@ struct Dashboard: View {
         }
     }
     var compatibility: some View {
-        VStack(spacing:16) {
-            Card(title:"当前环境") {
-                LabeledContent("系统",value:ProcessInfo.processInfo.operatingSystemVersionString)
-                LabeledContent("机型",value:model.machineModel)
-                LabeledContent("固件",value:model.firmwareVersion)
-                Text("macOS 26 的功能取决于实际固件和写权限，不能仅凭系统版本判断。用户已报告在 MacBook Pro（M4）/ macOS 26 上完成全部功能验证，芯片为 M4，系统小版本未提供。其他设备仍需实际检测。")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Card(title:"充电能力") {
-                Label(model.firmwareBackend ? "固件限充接口可用" : "查看本机支持的充电方式", systemImage: "battery.75percent")
-                    .font(.callout.weight(.medium))
-                DisclosureGroup("接口与检测详情") {
-                interfaceRow("充电开关接口", bit: 1)
-                Text("直接开启或暂停充电。不是每台 Mac 都有，本机不需要依赖它才能限充。")
-                    .font(.caption).foregroundStyle(.secondary)
-                interfaceRow("电量上限接口（固件限充）", bit: 4)
-                Text("把上限交给电脑内部执行，例如达到 79% 后停止充电。")
-                    .font(.caption).foregroundStyle(.secondary)
-                interfaceRow("适配器控制接口", bit: 2)
-                interfaceRow("独立物理电源检测", bit: 8)
-                if model.live, let capabilities = model.state?.capabilities, capabilities & 4 != 0, !model.adapterMode {
-                    Text(model.state?.configuration.mode == .system
-                         ? "本机已检测到电量上限接口，可用于日常限充。目前由系统管理。"
-                         : "当前使用电量上限接口管理限充，无需充电开关接口。")
-                        .font(.callout)
-                }
-                Text("“已检测到”表示接口可读取，写入是否成功会在执行操作时核对。“未检测到”不表示缺少管理员授权，也不表示全部功能不可用。")
-                    .font(.caption).foregroundStyle(.secondary)
-                HStack {Button("刷新诊断") {model.probe();model.checkService();model.readDeviceSummary()};Button("导出兼容性报告…") {model.exportCompatibility()}}
-                DisclosureGroup("查看原始探测结果") {Text(model.probeText).font(.system(.caption,design:.monospaced)).textSelection(.enabled).padding(.top,8)}
+        let capabilities = model.live && model.service.healthy && model.state?.helperVersion == expectedHelperVersion
+            ? model.state?.capabilities : nil
+        let supportsLimit = (capabilities ?? 0) & 5 != 0
+        let supportsDischarge = supportsLimit && (capabilities ?? 0) & 2 != 0
+
+        return VStack(spacing: 16) {
+            Card(title: "本机功能") {
+                capabilityRow("充电上限与充满一次", symbol: "battery.75percent", supported: capabilities.map { _ in supportsLimit })
+                Divider()
+                capabilityRow("接电放电与电量校准", symbol: "battery.25percent", supported: capabilities.map { _ in supportsDischarge })
+                if capabilities == nil {
+                    Button("查看后台服务") { model.selectedPage = 2 }
+                } else if !supportsLimit {
+                    Text("本机可继续查看电池状态。充电由 macOS 管理。")
+                        .font(.callout).foregroundStyle(.secondary)
                 }
             }
-            Card(title:"适配器兼容模式 · 实验性") {
-                Text("用于充电接口被固件限制、但适配器仍可控的情况。通过外接供电与电池供电之间切换维持范围，会产生电量往返变化。")
+            Card(title: "设备信息") {
+                LabeledContent("机型", value: model.machineModel)
+                LabeledContent("系统", value: ProcessInfo.processInfo.operatingSystemVersionString)
+            }
+            Card(title: "系统电池设置") {
+                Text("在 macOS 设置中查看电池健康与充电选项。")
                     .font(.callout).foregroundStyle(.secondary)
-                Text("仅开盖、清醒时有效；睡眠或合盖恢复供电。此模式不支持临时充满、手动放电和校准，也不能保证绕过系统原有限充。常规充电功能已有 macOS 26 用户实机反馈；本实验模式仍需单独核对。")
-                    .font(.caption).foregroundStyle(.secondary)
-                if model.adapterMode {
-                    Label("已手动启用",systemImage:"checkmark.circle").foregroundStyle(.orange)
-                    Button("退出兼容模式 / 恢复系统管理") {model.admin(["reset"])}.disabled(model.busy)
-                } else {
-                    Button("手动启用兼容模式…") {model.enableAdapterMode()}.disabled(!model.canEnableAdapterMode || model.busy)
-                    Text(model.service.state?.helperVersion != expectedHelperVersion ? "请先在后台服务页升级控制服务。" : (model.state?.capabilities ?? 0)&5 != 0 ? "当前普通充电接口可用，无需启用兼容模式。" : "需要可用的适配器控制与独立电源检测接口。")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
+                Button("打开系统电池设置") { model.openBatterySettings() }
             }
-            Card(title:"系统原生限充") {
-                Text("Apple Silicon Mac 从 macOS 26.4 起提供 80%–100% 系统限充。本程序提供设置入口，不调用或模拟苹果私有原生限充 API。")
-                    .font(.callout).foregroundStyle(.secondary)
-                Text(model.nativeLimitEligible ? "当前系统版本满足条件，请在系统设置中确认可用选项。" : "当前系统版本尚不满足 macOS 26.4 条件。")
-                    .font(.caption).foregroundStyle(.secondary)
-                Button("打开系统电池设置") {model.openBatterySettings()}
-                Link("Apple 功能说明",destination:URL(string:"https://support.apple.com/en-my/102338")!)
+            Card(title: "诊断") {
+                DisclosureGroup("硬件接口与固件版本") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        LabeledContent("固件", value: model.firmwareVersion)
+                        interfaceRow("固件限充", bit: 4)
+                        interfaceRow("充电开关", bit: 1)
+                        interfaceRow("适配器供电控制", bit: 2)
+                        interfaceRow("物理电源检测", bit: 8)
+                        Text("检测结果表示接口可读取，写入结果在执行操作时核对。")
+                            .font(.caption).foregroundStyle(.secondary)
+                        DisclosureGroup("原始检测结果") {
+                            Text(model.probeText).font(.system(.caption, design: .monospaced))
+                                .textSelection(.enabled).padding(.top, 8)
+                        }
+                    }.padding(.top, 8)
+                }
+                HStack {
+                    Button("刷新诊断") { model.probe(); model.checkService(); model.readDeviceSummary() }
+                    Button("导出诊断报告…") { model.exportCompatibility() }
+                }
             }
         }
+    }
+    private func capabilityRow(_ title: String, symbol: String, supported: Bool?) -> some View {
+        HStack {
+            Label(title, systemImage: symbol)
+            Spacer()
+            if let supported {
+                Label(supported ? "已检测到接口" : "未检测到所需接口",
+                      systemImage: supported ? "checkmark.circle.fill" : "minus.circle")
+                    .foregroundStyle(supported ? Color.green : .secondary)
+            } else {
+                Text("待检测").foregroundStyle(.secondary)
+            }
+        }.font(.callout)
     }
     var settings: some View {
         VStack(spacing: 16) {
@@ -1021,68 +1110,42 @@ struct MenuPopover: View {
             NSApp.activate(ignoringOtherApps: true)
         }
     }
-    private var protectionCaption: String {
-        guard model.live, let state = model.state else { return "只读监测 · 等待后台" }
-        if state.error != nil { return "策略待确认" }
-        if state.configuration.mode == .system { return "充电由 macOS 管理" }
-        return "日常上限 \(state.configuration.target)%"
-    }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            header
             batterySummary
-            Divider().opacity(0.65)
             if model.temporaryFlow {
                 activeFlow
-                HStack(spacing: 7) {
-                    Image(systemName: "shield.lefthalf.filled")
-                    Text("结束后恢复 \(model.state?.configuration.target ?? 80)% 日常上限")
-                    Spacer()
-                }.font(.system(size: 11)).foregroundStyle(.secondary).padding(.horizontal, 2)
-            } else { limitControl }
-            HStack(spacing: 10) {
+            } else {
+                limitControl
+            }
+            HStack(spacing: 8) {
                 quickAction("充满一次", icon: "battery.100percent", enabled: model.fullAvailable && !model.temporaryFlow) { model.apply(.full) }
                 quickAction("放电与校准", icon: "slider.horizontal.3", enabled: true) { open(0) }
             }
-            if model.updates.available != nil {
-                UpdateMenuButton(updater: model.updates) { open(3) }.buttonStyle(.plain).foregroundStyle(cellmoriAccent)
-            }
             footer
         }
-        .padding(20).frame(width: 384).tint(cellmoriAccent)
+        .padding(17).frame(width: 384).tint(cellmoriAccent)
         .background(.regularMaterial)
         .background(MenuPanelWindowCapture(reference: panelWindow).frame(width: 0, height: 0))
     }
-    private var header: some View {
-        HStack(spacing: 9) {
-            Image(systemName: "bolt.shield.fill").font(.system(size: 18, weight: .medium)).foregroundStyle(cellmoriAccent)
-                .frame(width: 30, height: 30).background(cellmoriAccent.opacity(0.09), in: RoundedRectangle(cornerRadius: 9))
-            Text("Cellmori").font(.system(size: 14, weight: .semibold))
-            Spacer()
-            if model.busy { ProgressView().controlSize(.mini).accessibilityLabel("正在应用操作") }
-            Button { open(2) } label: { ServiceBadge(compact: true) }.buttonStyle(.plain)
-        }
-    }
     private var batterySummary: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .center) {
-                VStack(alignment: .leading, spacing: 7) {
-                    Text(model.percentageText).font(.system(size: 48, weight: .medium)).tracking(-2).foregroundStyle(Color(nsColor: .labelColor)).monospacedDigit()
-                    Label(model.powerDisplay.title, systemImage: model.powerDisplay.symbol)
-                        .font(.system(size: 12, weight: .medium)).foregroundStyle(model.powerDisplay.interfaceColor)
-                        .padding(.horizontal, 9).padding(.vertical, 5)
-                        .background(model.powerDisplay.interfaceColor.opacity(0.08), in: Capsule())
+        VStack(alignment: .leading, spacing: 13) {
+            HStack(spacing: 11) {
+                Image(systemName: model.powerDisplay.symbol)
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(model.powerDisplay.interfaceColor)
+                    .frame(width: 38, height: 38)
+                    .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 11))
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("电池").font(.headline)
+                    Text(model.powerDisplay.title).font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
-                BatteryGlyph(fraction: (model.battery?.percent ?? 0)/100, charging: model.powerDisplay == .charging)
-                    .scaleEffect(0.8).frame(width: 96, height: 56)
+                Text(model.percentageText)
+                    .font(.system(size: 36, weight: .semibold)).monospacedDigit()
+                    .accessibilityLabel("电池电量 \(model.percentageText)")
             }
-            HStack(spacing: 5) {
-                Image(systemName: "shield.lefthalf.filled")
-                Text(protectionCaption)
-                if model.state?.sleepHoldActive == true { Text("· 保持唤醒") }
-            }.font(.system(size: 11)).foregroundStyle(.secondary)
-            Divider().opacity(0.6)
             HStack(spacing: 0) {
                 smallMetric("温度", value: model.battery.map { String(format:"%.1f°", $0.temperature) } ?? "—", icon: "thermometer.medium")
                 Spacer(minLength: 8)
@@ -1090,7 +1153,7 @@ struct MenuPopover: View {
                 Spacer(minLength: 8)
                 smallMetric("健康", value: model.systemHealth, icon: "heart")
             }
-        }.padding(.horizontal, 2).padding(.vertical, 4)
+        }.padding(.horizontal, 2)
     }
     private func smallMetric(_ name: String, value: String, icon: String) -> some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -1099,25 +1162,17 @@ struct MenuPopover: View {
         }.accessibilityElement(children: .combine)
     }
     private var limitControl: some View {
-        VStack(spacing: 11) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("充电上限").font(.system(size: 13, weight: .semibold))
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label("日常限充", systemImage: "shield.lefthalf.filled").font(.headline)
                 Spacer()
-                Text("\(Int(model.target))").font(.system(size: 27, weight: .medium)).monospacedDigit()
-                    .foregroundStyle(cellmoriAccent)
-                Text("%").font(.system(size: 12)).foregroundStyle(.secondary)
-            }
-            Slider(value: wholeNumber($model.target), in: 40...100)
-                .accessibilityLabel("充电上限").disabled(model.temporaryFlow || model.busy)
-            HStack(spacing: 8) {
-                ForEach([60, 80, 90, 100], id: \.self) { n in
-                    Button { model.target = Double(n) } label: {
-                        Text("\(n)%").font(.system(size: 11, weight: .medium)).frame(maxWidth: .infinity)
-                    }.buttonStyle(SoftButtonStyle(selected: Int(model.target) == n))
-                            .accessibilityValue(Int(model.target) == n ? "已选中" : "未选中")
-                        .disabled(model.temporaryFlow || model.busy)
+                if model.chargeAvailable && !model.busy {
+                    Label(model.limitApplied ? "已生效" : "待应用",
+                          systemImage: model.limitApplied ? "checkmark.circle.fill" : "circle.dashed")
+                        .font(.caption).foregroundStyle(model.limitApplied ? Color.green : .secondary)
                 }
             }
+            ChargeRangeEditor()
             if model.busy {
                 HStack(spacing: 7) { ProgressView().controlSize(.small); Text("正在提交操作…").font(.callout) }
                     .frame(maxWidth: .infinity).padding(.vertical, 7)
@@ -1126,19 +1181,21 @@ struct MenuPopover: View {
                     Text("充电管理暂不可用").font(.callout)
                     Button("查看后台与可用功能") { open(2) }.buttonStyle(.link)
                 }.frame(maxWidth: .infinity).padding(.vertical, 5)
-            } else if model.limitApplied {
-                AppliedLimitStatus(target: Int(model.target))
-                    .frame(maxWidth: .infinity).padding(.vertical, 7)
             } else {
-                Button { model.apply(.limit) } label: {
-                    Text(model.limitButtonTitle).font(.system(size: 12, weight: .semibold))
-                        .frame(maxWidth: .infinity)
-                }.buttonStyle(PrimaryButtonStyle())
-                    .disabled(!model.chargeAvailable || model.busy || model.temporaryFlow)
+                if !model.limitApplied {
+                    if model.live, let saved = model.state?.configuration, saved.mode == .limit {
+                        Text("当前范围 \(saved.rechargeAt)%–\(saved.target)%")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Button { model.apply(.limit) } label: {
+                        Text("应用充电范围").font(.system(size: 12, weight: .semibold))
+                            .frame(maxWidth: .infinity)
+                    }.buttonStyle(PrimaryButtonStyle())
+                }
             }
         }.padding(15)
-            .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 14))
-            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.primary.opacity(0.035)))
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 15))
+            .overlay(RoundedRectangle(cornerRadius: 15).strokeBorder(Color.primary.opacity(0.075)))
     }
     private var activeFlow: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -1148,7 +1205,15 @@ struct MenuPopover: View {
                 Button(model.stopFlowTitle) { model.stopTemporaryFlow() }.font(.system(size: 12, weight: .medium)).buttonStyle(.bordered).controlSize(.small)
                     .disabled(model.busy || !model.service.healthy)
             }
-            Text(model.status).font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Text(model.status).font(.callout).fixedSize(horizontal: false, vertical: true)
+            if let config = model.state?.configuration {
+                HStack(spacing: 6) {
+                    Text("结束后恢复 \(config.rechargeAt)%–\(config.target)%")
+                    if model.state?.sleepHoldActive == true {
+                        Text("· 保持唤醒中")
+                    }
+                }.font(.caption).foregroundStyle(.secondary)
+            }
         }.padding(13).background(cellmoriAccent.opacity(0.07), in: RoundedRectangle(cornerRadius: 14))
     }
     private func quickAction(_ title: String, icon: String, enabled: Bool, perform: @escaping () -> Void) -> some View {
@@ -1161,22 +1226,34 @@ struct MenuPopover: View {
         }.buttonStyle(SoftButtonStyle()).disabled(!enabled || model.busy)
     }
     private var footer: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             Divider().opacity(0.65)
             Button { open(2) } label: {
-                Text(serviceIdentifier).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
-            }.buttonStyle(.plain).help("查看后台名称、版本与运行状态")
-            HStack(spacing: 16) {
+                HStack(alignment: .top, spacing: 9) {
+                    Image(systemName: "gearshape.2").foregroundStyle(.secondary)
+                        .frame(width: 19).padding(.top, 1)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("充电管理后台").font(.callout.weight(.medium))
+                        Text(serviceIdentifier).font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.secondary).padding(.top, 1)
+                    }
+                    Spacer(minLength: 4)
+                    ServiceBadge(compact: true)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("查看充电管理后台详情")
+            MenuUpdateControls(updater: model.updates) { open(3) } actions: {
                 Button { open(0) } label: {
-                    Label("打开控制面板", systemImage: "macwindow")
-                }.font(.system(size: 12, weight: .medium))
-                Spacer()
-                Button { open(3); if model.updates.available == nil { model.updates.check() } } label: { Image(systemName: "arrow.clockwise").frame(width: 24, height: 24) }
-                    .help("检查更新").accessibilityLabel("检查更新")
-                Button { open(3) } label: { Image(systemName: "gearshape").frame(width: 24, height: 24) }.help("偏好设置").accessibilityLabel("偏好设置")
-                Button { NSApp.terminate(nil) } label: { Image(systemName: "power").frame(width: 24, height: 24) }.help("退出界面，后台继续运行").accessibilityLabel("退出界面")
-            }.font(.system(size: 13)).foregroundStyle(.secondary).buttonStyle(.plain)
-        }.padding(.top, 2)
+                    Label("控制面板", systemImage: "macwindow")
+                }.help("打开控制面板")
+            } exit: {
+                Button { NSApp.terminate(nil) } label: {
+                    Label("退出界面", systemImage: "power")
+                }.help("退出界面，后台继续运行")
+            }
+        }
     }
 
 }

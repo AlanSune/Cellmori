@@ -20,8 +20,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundleName</key><string>Cellmori</string>
 <key>CFBundleDisplayName</key><string>Cellmori 电池管家</string>
 <key>CFBundleIdentifier</key><string>io.cellmori.app</string>
-<key>CFBundleVersion</key><string>28</string>
-<key>CFBundleShortVersionString</key><string>0.6.8</string>
+<key>CFBundleVersion</key><string>36</string>
+<key>CFBundleShortVersionString</key><string>0.6.9</string>
 <key>CFBundleExecutable</key><string>Cellmori</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>CFBundlePackageType</key><string>APPL</string>

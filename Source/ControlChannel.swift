@@ -37,11 +37,12 @@ struct ControlIdentity: Codable {
 // Exact, finite command surface; no shell strings, executable paths or file paths.
 func permittedControlRequest(_ args: [String]) -> Bool {
     if args == ["ping"] || args == ["reset"] || args == ["firmware-test"] { return true }
-    guard (args.count == 5 || args.count == 6), args[0] == "configure", let _ = Mode(rawValue: args[1]),
+    guard (5...7).contains(args.count), args[0] == "configure", let mode = Mode(rawValue: args[1]), mode != .retiredAdapterLimit,
           let target = Int(args[2]), (40...100).contains(target),
           let temperature = Double(args[3]), temperature.isFinite, (35...42).contains(temperature),
           let discharge = Int(args[4]), (20...90).contains(discharge) else { return false }
-    return args.count == 5 || ["0", "1"].contains(args[5])
+    guard args.count < 6 || ["0", "1"].contains(args[5]) else { return false }
+    return args.count < 7 || Int(args[6]).map { rechargeGapRange.contains($0) } == true
 }
 
 final class ControlServer: NSObject, NSXPCListenerDelegate, CellmoriControl {

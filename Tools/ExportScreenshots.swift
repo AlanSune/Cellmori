@@ -64,7 +64,7 @@ import SwiftUI
         guard CommandLine.arguments.count == 2 else { throw CMError.message("Output directory required") }
         let output = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
-        for (page, name) in [(0, "charge-control"), (1, "battery-health"), (2, "background-service"), (3, "software-updates")] {
+        for (page, name) in [(0, "charge-control"), (1, "battery-health"), (2, "background-service"), (3, "software-updates"), (4, "device-support")] {
             let model = demoModel(); model.selectedPage = page
             try render(Dashboard().environmentObject(model), size: CGSize(width: 1000, height: page == 1 ? 1040 : page == 3 ? 1120 : page == 0 ? 1120 : 1000),
                        path: output.appendingPathComponent(name + ".png"))

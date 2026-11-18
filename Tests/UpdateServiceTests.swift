@@ -33,9 +33,9 @@ private final class MemoryUpdatePreferences: UserDefaults {
     }
     static func release() -> AppRelease {
         let url = "https://github.com/AlanSune/Cellmori"
-        return AppRelease(tag_name: "v0.6.9", html_url: URL(string: url + "/releases/tag/v0.6.9")!, body: "Release notes", draft: false, prerelease: false, assets: [
-            ReleaseAsset(name: "Cellmori-0.6.9-arm64.pkg", browser_download_url: URL(string: url + "/releases/download/v0.6.9/Cellmori-0.6.9-arm64.pkg")!, size: 3),
-            ReleaseAsset(name: "Cellmori-0.6.9-arm64.pkg.sha256", browser_download_url: URL(string: url + "/releases/download/v0.6.9/Cellmori-0.6.9-arm64.pkg.sha256")!, size: 97)
+        return AppRelease(tag_name: "v0.6.10", html_url: URL(string: url + "/releases/tag/v0.6.10")!, body: "Release notes", draft: false, prerelease: false, assets: [
+            ReleaseAsset(name: "Cellmori-0.6.10-arm64.pkg", browser_download_url: URL(string: url + "/releases/download/v0.6.10/Cellmori-0.6.10-arm64.pkg")!, size: 3),
+            ReleaseAsset(name: "Cellmori-0.6.10-arm64.pkg.sha256", browser_download_url: URL(string: url + "/releases/download/v0.6.10/Cellmori-0.6.10-arm64.pkg.sha256")!, size: 97)
         ])
     }
     @MainActor static func main() async throws {
@@ -46,7 +46,7 @@ private final class MemoryUpdatePreferences: UserDefaults {
         }
         let valid = release()
         check(try UpdateValidation.candidate(valid, current: appVersion) != nil, "newer release accepted")
-        check(try UpdateValidation.candidate(valid, current: "0.6.9") == nil, "same version ignored")
+        check(try UpdateValidation.candidate(valid, current: "0.6.10") == nil, "same version ignored")
         check(try UpdateValidation.candidate(valid, current: "0.7.0") == nil, "downgrade ignored")
         var changed = valid; changed.prerelease = true
         check(try UpdateValidation.candidate(changed, current: appVersion) == nil, "prerelease ignored")
@@ -102,12 +102,12 @@ private final class MemoryUpdatePreferences: UserDefaults {
         do { _ = try await service.latest(); preconditionFailure("offline request accepted") } catch { checks += 1 }
         MockReleaseProtocol.failure = nil
         MockReleaseProtocol.responseData = try JSONSerialization.data(withJSONObject: [
-            "tag_name":"v0.6.9", "html_url":"https://github.com/AlanSune/Cellmori/releases/tag/v0.6.9",
+            "tag_name":"v0.6.10", "html_url":"https://github.com/AlanSune/Cellmori/releases/tag/v0.6.10",
             "body":"Notes", "draft":false, "prerelease":false,
             "assets": valid.assets.map { ["name":$0.name,"browser_download_url":$0.browser_download_url.absoluteString,"size":$0.size] as [String:Any] }
         ])
         let found = try await service.latest()
-        check(found?.version.description == "0.6.9", "HTTP release parsing and selection")
+        check(found?.version.description == "0.6.10", "HTTP release parsing and selection")
         let preferences = MemoryUpdatePreferences(suiteName: "CellmoriUpdatePreferencesTests")!
         let fresh = AppUpdater(preferences: preferences)
         check(fresh.automaticallyCheck, "automatic checks enabled on first use")

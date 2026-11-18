@@ -6,8 +6,8 @@ import IOKit.ps
 let serviceDirectory = "/Library/Application Support/Cellmori"
 let helperPath = "/Library/PrivilegedHelperTools/io.cellmori.helper"
 let serviceIdentifier = "io.cellmori.helper"
-let appVersion = "0.6.8"
-let expectedHelperVersion = "0.6.8"
+let appVersion = "0.6.9"
+let expectedHelperVersion = "0.6.9"
 let statePath = serviceDirectory + "/state.json"
 let configurationPath = serviceDirectory + "/configuration.json"
 
@@ -108,8 +108,10 @@ enum PowerDisplayState: CaseIterable {
         }
     }
 }
-enum Mode: String, Codable, CaseIterable {
-    case system, limit, full, discharge, calibrate, adapterLimit
+enum Mode: String, Codable {
+    case system, limit, full, discharge, calibrate
+    // Decode old configuration and status files until the helper restores power.
+    case retiredAdapterLimit = "adapterLimit"
     var title: String {
         switch self {
         case .system: return "系统管理"
@@ -117,13 +119,31 @@ enum Mode: String, Codable, CaseIterable {
         case .full: return "临时充满"
         case .discharge: return "目标放电"
         case .calibrate: return "校准流程"
-        case .adapterLimit: return "适配器兼容限充"
+        case .retiredAdapterLimit: return "等待恢复系统管理"
         }
     }
 }
+let rechargeGapRange = 1...20
+let defaultRechargeGap = 5
+
+func rechargeThresholdRange(upper: Int) -> ClosedRange<Int> {
+    (upper - rechargeGapRange.upperBound)...(upper - rechargeGapRange.lowerBound)
+}
+
+func rechargeThreshold(_ percent: Int, upper: Int) -> Int {
+    let valid = rechargeThresholdRange(upper: upper)
+    return min(valid.upperBound, max(valid.lowerBound, percent))
+}
+
 struct Configuration: Codable {
     var mode: Mode = .system
     var target: Int = 80
+    var rechargeGap: Int? = nil
+    var effectiveRechargeGap: Int {
+        guard let rechargeGap, rechargeGapRange.contains(rechargeGap) else { return defaultRechargeGap }
+        return rechargeGap
+    }
+    var rechargeAt: Int { target - effectiveRechargeGap }
     var dischargeTarget: Int = 50
     var temperatureLimit: Double = 40
     var started: Date = Date()
@@ -138,6 +158,20 @@ struct Configuration: Codable {
     var adapterFallback: Bool? = nil
     var dischargeKeepAwake: Bool? = nil // Missing in old configurations means off.
 }
+// Keep recovery intent on disk until both restorations succeed. A later tick
+// or installer invocation can retry safely if either operation fails.
+func retireAdapterLimit(_ config: inout Configuration, restoreAdapter: () throws -> Void,
+                        releaseSleepHold: () throws -> Void) throws -> Bool {
+    guard config.mode == .retiredAdapterLimit || config.adapterFallback == true else { return false }
+    if config.ownsHardware { try restoreAdapter() }
+    try releaseSleepHold()
+    config.mode = .system
+    config.ownsHardware = false
+    config.adapterFallback = nil
+    config.firmwareOriginal = nil
+    return true
+}
+
 struct FirmwareSettings: Codable, Equatable {
     var activation: Int
     var upper: Int
@@ -151,7 +185,7 @@ func firmwareSettings(for c: Configuration, discharging: Bool = false) -> Firmwa
     }
     let temporaryFull = !c.thermalPaused && (c.mode == .full || c.mode == .calibrate && c.stage != "discharge")
     let upper = temporaryFull ? 100 : c.target
-    return FirmwareSettings(activation: 2, upper: upper, lower: upper-5)
+    return FirmwareSettings(activation: 2, upper: upper, lower: upper - (temporaryFull ? defaultRechargeGap : c.effectiveRechargeGap))
 }
 // Install the ceiling before reconnecting, then verify after adapter changes.
 // Some controllers can reset charging policy when external power is restored.
@@ -179,9 +213,10 @@ func applyFirmwareProtection(_ expected: FirmwareSettings, discharge: Bool,
 }
 func firmwareSleepSettings(for c: Configuration) -> FirmwareSettings {
     var upper=c.target
-    if !c.thermalPaused && (c.mode == .full || c.mode == .calibrate && c.stage != "discharge") { upper=100 }
+    let temporaryFull = !c.thermalPaused && (c.mode == .full || c.mode == .calibrate && c.stage != "discharge")
+    if temporaryFull { upper = 100 }
     if c.mode == .discharge { upper=max(40,min(c.target,c.dischargeTarget)) }
-    return FirmwareSettings(activation:2,upper:upper,lower:upper-5)
+    return FirmwareSettings(activation:2,upper: upper, lower: upper - (temporaryFull ? defaultRechargeGap : c.effectiveRechargeGap))
 }
 // Presentation only: never treat a submitted command as observed charging.
 func temporaryFlowStatus(_ c: Configuration, battery b: Battery?, sleepHoldActive: Bool = false) -> String? {
@@ -205,9 +240,9 @@ func temporaryFlowStatus(_ c: Configuration, battery b: Battery?, sleepHoldActiv
     }
     return nil
 }
-func limitSettingsApplied(_ c: Configuration?, target: Int, temperature: Double) -> Bool {
-    guard let c, c.mode == .limit || c.mode == .adapterLimit else { return false }
-    return c.target == target && c.temperatureLimit == temperature
+func limitSettingsApplied(_ c: Configuration?, target: Int, temperature: Double, rechargeGap: Int = defaultRechargeGap) -> Bool {
+    guard let c, c.mode == .limit else { return false }
+    return c.target == target && c.temperatureLimit == temperature && c.effectiveRechargeGap == rechargeGap
 }
 struct ServiceState: Codable {
     var updated = Date()
@@ -253,16 +288,11 @@ func evaluate(_ config: inout Configuration, battery b: Battery, now: Date, slee
     if !b.external { return Decision(message: "使用电池中；接通电源后继续策略") }
     switch config.mode {
     case .system: return Decision()
-    case .limit, .adapterLimit:
+    case .retiredAdapterLimit: return Decision()
+    case .limit:
         if b.percent >= Double(config.target) { config.chargeAllowed = false }
-        if b.percent <= Double(config.target - 5) { config.chargeAllowed = true }
-        if config.mode == .adapterLimit {
-            if b.percent <= 20 { config.chargeAllowed = true }
-            if b.lidClosed != false { return Decision(message: "兼容限充已暂停：请开盖使用，已恢复外接供电") }
-            return Decision(charge: config.chargeAllowed, discharge: !config.chargeAllowed,
-                            message: config.chargeAllowed ? "兼容模式：接电充至 \(config.target)%" : "兼容模式：使用电池，降至 \(config.target-5)% 后恢复外接供电")
-        }
-        return Decision(charge: config.chargeAllowed, message: config.chargeAllowed ? "充电至 \(config.target)%" : "已暂停充电；低于 \(config.target-5)% 恢复")
+        if b.percent <= Double(config.rechargeAt) { config.chargeAllowed = true }
+        return Decision(charge: config.chargeAllowed, message: config.chargeAllowed ? "充电至 \(config.target)%" : "已暂停充电；低于 \(config.rechargeAt)% 恢复")
     case .full:
         if b.full || b.percent >= 100 { return finish("临时充满完成，已恢复原上限") }
         return Decision(message: "临时充电至 100%")
