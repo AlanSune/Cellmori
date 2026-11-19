@@ -22,7 +22,7 @@ Native macOS battery management · charge limits · full-charge override · disc
 - Make daily changes through authenticated XPC without repeated administrator prompts.
 - Check official releases in-app, download and verify the PKG, then open the macOS installer; the verified installation reopens the app as the logged-in user. Daily checks are on by default and can be disabled.
 
-Latest release: **0.6.9 (build 36)**. A two-handle control sets the recharge threshold and charge limit in the dashboard and menu bar popover. This release also reorganizes the popover and retires adapter-based fallback limiting. Both interfaces were tested by dragging and applying a range on M1/macOS 15.8.3, with matching firmware readback. See [validation](docs/VALIDATION.md). Source license: **MIT**. No external package dependencies or built-in telemetry uploads.
+Latest release: **0.6.10 (build 42)**. This release updates the dashboard and fixed-size menu bar popover, adds appearance settings, lets you move or undo a draft charging range, and guides you through macOS installation approval. Tested on Apple M1 with macOS 15.8.3. Source license: **MIT**. No external package dependencies or built-in telemetry uploads.
 
 ## Interface previews
 
@@ -36,21 +36,25 @@ Images are offscreen renders of the actual application views using clearly label
 
 Opening the dashboard, preferences or backend details now dismisses the originating menu panel first, so it no longer stays above the destination window.
 
+Choose System, Light, or Dark in Preferences → Appearance. Cellmori remembers the choice and applies it to both the main window and the menu bar panel.
+
 ## Compatibility
 
 The installer targets **Apple Silicon, macOS 15.x and 26.x**. A MacBook Pro (M4) user reported testing “all features” of the 0.6.0 series on macOS 26. The chip is M4; the OS minor version and per-feature logs were not supplied. This is a user report for that device, not certification of every model or firmware. Earlier development observations used M1 / macOS 15.8.2. See the [compatibility record](docs/COMPATIBILITY.md).
 
 ## In-app updates
 
-Use Preferences → Software Update, the Cellmori application menu or the menu bar panel. Only stable releases are offered. Downloads are verified with SHA-256 and checked again before opening Installer. Automatic checks are enabled by default and can be disabled; downloads and installation require your actions. Update checks contact GitHub without sending battery data.
+Use Preferences → Software Update, the Cellmori application menu or the menu bar panel. Only stable releases are offered. Downloads are verified with SHA-256 and checked again before opening Installer. The same screen can open Privacy & Security if macOS blocks the package. Automatic checks are enabled by default and can be disabled; downloads and installation require your actions. Update checks contact GitHub without sending battery data.
 
 ![Software update preferences](docs/images/software-updates.png)
 
 ## Install
 
-Download the PKG from [Releases](https://github.com/AlanSune/Cellmori/releases/latest), quit the running app and install on the current boot volume. The app goes to `/Applications/Cellmori.app`; the optional backend `io.cellmori.helper` is selected by default. A fresh installation leaves charging under macOS control until you apply a policy.
+Download the PKG from [Releases](https://github.com/AlanSune/Cellmori/releases/latest), open the package and install on the current boot volume. The app goes to `/Applications/Cellmori.app`; the optional backend `io.cellmori.helper` is selected by default. A fresh installation leaves charging under macOS control until you apply a policy.
 
 The app and helper use **ad-hoc signatures with Hardened Runtime**. The **PKG is unsigned and unnotarized**. A regular GitHub release does not imply Apple notarization or universal hardware acceptance. Do not disable SIP or system-wide security protections to run the app.
+
+For a fresh install, first try to open the verified PKG from the official release. If macOS says it cannot verify the developer, dismiss the alert, go to System Settings → Privacy & Security → Security, and confirm that the blocked file is the Cellmori package you just downloaded before choosing Open Anyway. [Apple installation guidance](https://support.apple.com/en-us/102445)
 
 Installing, updating and removing the backend requires administrator authorization. Daily controls use XPC with code-hash/account checks. Rebuilding or replacing the app requires updating its backend binding.
 
@@ -71,7 +75,7 @@ bash build.sh
 bash build-installer.sh
 ```
 
-Outputs: `Cellmori.app` and `dist/Cellmori-0.6.9-arm64.pkg`. Build/test commands do not install a daemon or change charging policies. Navigation tests use offscreen AppKit windows; they do not replace an actual menu bar interaction test on each macOS version.
+Outputs: `Cellmori.app` and `dist/Cellmori-0.6.10-arm64.pkg`. Build/test commands do not install a daemon or change charging policies. Navigation tests use offscreen AppKit windows; they do not replace an actual menu bar interaction test on each macOS version.
 
 ## Documentation and license
 

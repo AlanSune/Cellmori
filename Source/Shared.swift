@@ -6,8 +6,8 @@ import IOKit.ps
 let serviceDirectory = "/Library/Application Support/Cellmori"
 let helperPath = "/Library/PrivilegedHelperTools/io.cellmori.helper"
 let serviceIdentifier = "io.cellmori.helper"
-let appVersion = "0.6.9"
-let expectedHelperVersion = "0.6.9"
+let appVersion = "0.6.10"
+let expectedHelperVersion = "0.6.10"
 let statePath = serviceDirectory + "/state.json"
 let configurationPath = serviceDirectory + "/configuration.json"
 
@@ -126,6 +126,10 @@ enum Mode: String, Codable {
 let rechargeGapRange = 1...20
 let defaultRechargeGap = 5
 
+func shiftedChargeUpper(_ upper: Int, by amount: Int) -> Int {
+    min(100, max(40, upper + amount))
+}
+
 func rechargeThresholdRange(upper: Int) -> ClosedRange<Int> {
     (upper - rechargeGapRange.upperBound)...(upper - rechargeGapRange.lowerBound)
 }
@@ -133,6 +137,11 @@ func rechargeThresholdRange(upper: Int) -> ClosedRange<Int> {
 func rechargeThreshold(_ percent: Int, upper: Int) -> Int {
     let valid = rechargeThresholdRange(upper: upper)
     return min(valid.upperBound, max(valid.lowerBound, percent))
+}
+
+func chargeRangeMovingLower(_ percent: Int, anchoredAt upper: Int) -> (lower: Int, upper: Int) {
+    let adjustedUpper = min(upper, shiftedChargeUpper(percent, by: rechargeGapRange.upperBound))
+    return (rechargeThreshold(percent, upper: adjustedUpper), adjustedUpper)
 }
 
 struct Configuration: Codable {

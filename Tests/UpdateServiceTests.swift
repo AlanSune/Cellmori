@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import Foundation
+import CoreServices
 
 private final class MockReleaseProtocol: URLProtocol {
     static var responseCode = 200
@@ -33,9 +34,9 @@ private final class MemoryUpdatePreferences: UserDefaults {
     }
     static func release() -> AppRelease {
         let url = "https://github.com/AlanSune/Cellmori"
-        return AppRelease(tag_name: "v0.6.10", html_url: URL(string: url + "/releases/tag/v0.6.10")!, body: "Release notes", draft: false, prerelease: false, assets: [
-            ReleaseAsset(name: "Cellmori-0.6.10-arm64.pkg", browser_download_url: URL(string: url + "/releases/download/v0.6.10/Cellmori-0.6.10-arm64.pkg")!, size: 3),
-            ReleaseAsset(name: "Cellmori-0.6.10-arm64.pkg.sha256", browser_download_url: URL(string: url + "/releases/download/v0.6.10/Cellmori-0.6.10-arm64.pkg.sha256")!, size: 97)
+        return AppRelease(tag_name: "v0.6.11", html_url: URL(string: url + "/releases/tag/v0.6.11")!, body: "Release notes", draft: false, prerelease: false, assets: [
+            ReleaseAsset(name: "Cellmori-0.6.11-arm64.pkg", browser_download_url: URL(string: url + "/releases/download/v0.6.11/Cellmori-0.6.11-arm64.pkg")!, size: 3),
+            ReleaseAsset(name: "Cellmori-0.6.11-arm64.pkg.sha256", browser_download_url: URL(string: url + "/releases/download/v0.6.11/Cellmori-0.6.11-arm64.pkg.sha256")!, size: 97)
         ])
     }
     @MainActor static func main() async throws {
@@ -46,7 +47,7 @@ private final class MemoryUpdatePreferences: UserDefaults {
         }
         let valid = release()
         check(try UpdateValidation.candidate(valid, current: appVersion) != nil, "newer release accepted")
-        check(try UpdateValidation.candidate(valid, current: "0.6.10") == nil, "same version ignored")
+        check(try UpdateValidation.candidate(valid, current: "0.6.11") == nil, "same version ignored")
         check(try UpdateValidation.candidate(valid, current: "0.7.0") == nil, "downgrade ignored")
         var changed = valid; changed.prerelease = true
         check(try UpdateValidation.candidate(changed, current: appVersion) == nil, "prerelease ignored")
@@ -74,6 +75,16 @@ private final class MemoryUpdatePreferences: UserDefaults {
         for bad in ["http://github.com/file", "https://github.com.evil.test/file", "https://user:password@github.com/file", "https://example.com/file", "https://github.com:8443/file"] {
             check(!UpdateValidation.allowsRedirect(URL(string: bad)), "unexpected redirect rejected")
         }
+        let launchDenied = NSError(domain: NSOSStatusErrorDomain, code: Int(kLSNoLaunchPermissionErr))
+        check(UpdateInstallation.launchPermissionDenied(launchDenied), "launch permission denial opens guidance")
+        let wrappedDenial = NSError(domain: NSCocoaErrorDomain, code: 256,
+                                    userInfo: [NSUnderlyingErrorKey: launchDenied])
+        check(UpdateInstallation.launchPermissionDenied(wrappedDenial), "wrapped launch permission denial opens guidance")
+        check(!UpdateInstallation.launchPermissionDenied(CocoaError(.fileReadNoPermission)),
+              "file read errors do not trigger Gatekeeper guidance")
+        check(!UpdateInstallation.launchPermissionDenied(NSError(domain: NSOSStatusErrorDomain, code: -128)),
+              "cancelling does not open system settings")
+        check(UpdateInstallation.privacySettings.scheme == "x-apple.systempreferences", "settings link uses system handler")
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -102,12 +113,12 @@ private final class MemoryUpdatePreferences: UserDefaults {
         do { _ = try await service.latest(); preconditionFailure("offline request accepted") } catch { checks += 1 }
         MockReleaseProtocol.failure = nil
         MockReleaseProtocol.responseData = try JSONSerialization.data(withJSONObject: [
-            "tag_name":"v0.6.10", "html_url":"https://github.com/AlanSune/Cellmori/releases/tag/v0.6.10",
+            "tag_name":"v0.6.11", "html_url":"https://github.com/AlanSune/Cellmori/releases/tag/v0.6.11",
             "body":"Notes", "draft":false, "prerelease":false,
             "assets": valid.assets.map { ["name":$0.name,"browser_download_url":$0.browser_download_url.absoluteString,"size":$0.size] as [String:Any] }
         ])
         let found = try await service.latest()
-        check(found?.version.description == "0.6.10", "HTTP release parsing and selection")
+        check(found?.version.description == "0.6.11", "HTTP release parsing and selection")
         let preferences = MemoryUpdatePreferences(suiteName: "CellmoriUpdatePreferencesTests")!
         let fresh = AppUpdater(preferences: preferences)
         check(fresh.automaticallyCheck, "automatic checks enabled on first use")

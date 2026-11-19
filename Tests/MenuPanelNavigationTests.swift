@@ -34,11 +34,31 @@ import SwiftUI
         MenuPanelNavigation.openDashboard(from: dashboard, prepare: {}, show: {}, activate: {})
         precondition(dashboard.closeCount == 0)
         let reference = MenuPanelWindowReference()
-        let capture = MenuPanelWindowCapture.WindowCaptureView(reference: reference)
+        let capture = InterfaceWindowCapture.WindowCaptureView(reference: reference)
         unrelated.contentView = capture
         precondition(reference.window === unrelated)
         unrelated.contentView = nil
         precondition(reference.window == nil)
-        print("PASS: menu panel closes before dashboard opens; other windows preserved; missing capture and window lifecycle covered")
+        let editor = RangeFocusBoundary.BoundaryView(frame: NSRect(x: 10, y: 10, width: 45, height: 35))
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: 100, height: 100))
+        dashboard.contentView = content
+        content.addSubview(editor)
+        defer { editor.onExit = nil }
+        var dismissed = 0
+        editor.onExit = { dismissed += 1 }
+        editor.dismissIfOutside(window: dashboard, location: NSPoint(x: 20, y: 20))
+        precondition(dismissed == 0)
+        editor.dismissIfOutside(window: dashboard, location: NSPoint(x: 70, y: 20))
+        precondition(dismissed == 1)
+        editor.dismissIfOutside(window: unrelated, location: NSPoint(x: 20, y: 20))
+        precondition(dismissed == 2)
+        NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: unrelated)
+        precondition(dismissed == 2)
+        NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: dashboard)
+        precondition(dismissed == 3)
+        editor.onExit = nil
+        NotificationCenter.default.post(name: NSWindow.willCloseNotification, object: dashboard)
+        precondition(dismissed == 3)
+        print("PASS: menu panel closes before dashboard opens; other windows preserved; range focus cleared on outside clicks and window deactivation")
     }
 }

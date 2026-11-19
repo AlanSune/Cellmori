@@ -1,12 +1,27 @@
 // SPDX-License-Identifier: MIT
 import AppKit
+import CoreServices
 import SwiftUI
+
+enum UpdateInstallation {
+    static let privacySettings = URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension")!
+    static let instructions = "如果 macOS 提示无法验证开发者，请先关闭系统提示，再打开「隐私与安全性」。在「安全性」下核对本次 Cellmori 安装包，点击「仍要打开」。"
+
+    static func launchPermissionDenied(_ error: Error) -> Bool {
+        let error = error as NSError
+        let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError
+        return [error, underlying].compactMap { $0 }.contains {
+            $0.domain == NSOSStatusErrorDomain && $0.code == Int(kLSNoLaunchPermissionErr)
+        }
+    }
+}
 
 @MainActor final class AppUpdater: ObservableObject {
     @Published private(set) var available: AppUpdate?
     @Published private(set) var downloaded: VerifiedUpdate?
     @Published private(set) var checking = false
     @Published private(set) var downloading = false
+    @Published private(set) var openingInstaller = false
     @Published private(set) var progress: Double = 0
     @Published private(set) var status = "仅检查 GitHub 正式版，不接收预发布版本。"
     @Published private(set) var lastChecked: Date?
@@ -22,13 +37,21 @@ import SwiftUI
     private let preview: Bool
     private let service = UpdateService()
     private var downloadTask: Task<Void, Never>?
-    var busy: Bool { checking || downloading }
+    var busy: Bool { checking || downloading || openingInstaller }
     init(preview: Bool = false, preferences: UserDefaults = .standard) {
         self.preview = preview
         self.preferences = preferences
         automaticallyCheck = preview ? false : (preferences.object(forKey: "automaticallyCheckUpdates") as? Bool ?? true)
         if !preview { lastChecked = preferences.object(forKey: "lastUpdateCheck") as? Date }
     }
+    #if SCREENSHOT_EXPORT
+    func showPreviewUpdate(_ update: AppUpdate, downloaded: VerifiedUpdate? = nil) {
+        available = update
+        self.downloaded = downloaded
+        if downloaded != nil { status = "下载完成，SHA-256 校验通过。" }
+    }
+    #endif
+
     func checkAutomaticallyIfDue() {
         guard !preview, automaticallyCheck else { return }
         let previous = preferences.object(forKey: "lastAutomaticUpdateAttempt") as? Date ?? .distantPast
@@ -74,12 +97,35 @@ import SwiftUI
     func install() {
         guard !preview, !busy, let downloaded else { return }
         do {
-            // Recheck immediately before handing the file to Installer.
+            // Verify the exact file again before handing it off to macOS.
             try UpdateValidation.verify(downloaded.file, expectedSize: downloaded.update.package.size, hash: downloaded.sha256)
-            guard NSWorkspace.shared.open(downloaded.file) else { throw CMError.message("无法打开系统安装器，请在 Finder 中打开安装包。") }
-            NSApp.terminate(nil)
-        } catch { onError?(error.localizedDescription) }
+        } catch {
+            onError?(error.localizedDescription)
+            return
+        }
+        openingInstaller = true
+        Task {
+            defer { openingInstaller = false }
+            do {
+                _ = try await NSWorkspace.shared.open(downloaded.file, configuration: .init())
+                status = "请在 macOS 安装器中继续。若系统拦截，可从这里打开「隐私与安全性」。"
+            } catch {
+                if UpdateInstallation.launchPermissionDenied(error) {
+                    status = "macOS 未允许打开安装包。请在「隐私与安全性」查看本次提示。"
+                    openInstallPrivacySettings()
+                } else {
+                    onError?("无法打开安装包。可以在 Finder 中重试。\n\n" + error.localizedDescription)
+                }
+            }
+        }
     }
+
+    func openInstallPrivacySettings() {
+        if !NSWorkspace.shared.open(UpdateInstallation.privacySettings) {
+            onError?("无法直接打开设置。请手动进入「系统设置 → 隐私与安全性」，查看「安全性」下的安装提示。")
+        }
+    }
+
     func revealDownload() {
         guard let downloaded else { return }
         NSWorkspace.shared.activateFileViewerSelecting([downloaded.file])
@@ -125,61 +171,30 @@ struct AppUpdateView: View {
                     }
                     Button("取消下载") { updater.cancelDownload() }
                 } else if updater.downloaded != nil {
-                    HStack {
-                        Button("安装更新并退出") { updater.install() }.buttonStyle(.borderedProminent)
-                        Button("在 Finder 中显示") { updater.revealDownload() }
+                    Text("安装包未获 Apple 公证。\(UpdateInstallation.instructions)")
+                        .font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 8) { installationActions }
+                        VStack(alignment: .leading, spacing: 8) { installationActions }
                     }
                 } else {
                     Button("下载更新") { updater.download() }.buttonStyle(.borderedProminent).disabled(updater.busy)
                 }
             }
             DisclosureGroup("安装与验证说明") {
-                Text("下载后核对 SHA-256，安装前再次校验。安装由 macOS 请求管理员授权，后台继续维护当前策略。系统可能要求确认安装包来源，应用不会跳过系统安全检查。")
+                Text("下载后和打开安装包前都会核对 SHA-256。安装或更新后台服务时，macOS 会请求管理员认证。系统安装器开始更新前，Cellmori 会保持打开，以便查看步骤。")
                     .font(.caption).foregroundStyle(.secondary).padding(.top, 4)
             }.font(.caption)
             Link("打开 GitHub 发布页", destination: URL(string: UpdateValidation.repository + "/releases")!)
                 .font(.caption)
         }
     }
-}
 
-struct MenuUpdateControls<Actions: View, Exit: View>: View {
-    @ObservedObject var updater: AppUpdater
-    @State private var checkedFromMenu = false
-    let openDetails: () -> Void
-    @ViewBuilder var actions: () -> Actions
-    @ViewBuilder var exit: () -> Exit
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                actions()
-                Spacer()
-                Button {
-                    checkedFromMenu = true
-                    updater.check(showErrorAlert: false)
-                } label: {
-                    if updater.checking {
-                        HStack(spacing: 4) {
-                            ProgressView().controlSize(.mini).accessibilityHidden(true)
-                            Text("正在检查…")
-                        }
-                    } else {
-                        Label("检查更新", systemImage: "arrow.clockwise")
-                    }
-                }
-                .disabled(updater.busy)
-                Spacer()
-                exit()
-            }
-            if let update = updater.available {
-                Button(action: openDetails) {
-                    Label("查看新版 \(update.version)", systemImage: "arrow.down.circle")
-                }
-            }
-            if checkedFromMenu && !updater.busy {
-                Text(updater.status).foregroundStyle(.secondary)
-            }
-        }.font(.caption).buttonStyle(.borderless)
+    @ViewBuilder private var installationActions: some View {
+        Button(updater.openingInstaller ? "正在打开…" : "打开安装包") { updater.install() }
+            .buttonStyle(.borderedProminent).disabled(updater.busy)
+        Button("打开隐私与安全性") { updater.openInstallPrivacySettings() }
+        Button("在 Finder 中显示") { updater.revealDownload() }
     }
 }

@@ -9,7 +9,7 @@
 ![macOS](https://img.shields.io/badge/macOS-15%20%7C%2026-111827?logo=apple&logoColor=white)
 ![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-arm64-f97316)
 [![MIT License](https://img.shields.io/badge/license-MIT-22c55e)](LICENSE)
-[![Release](https://img.shields.io/badge/release-0.6.9-007aff)](https://github.com/AlanSune/Cellmori/releases/tag/v0.6.9)
+[![Release](https://img.shields.io/badge/release-0.6.10-007aff)](https://github.com/AlanSune/Cellmori/releases/tag/v0.6.10)
 
 [下载正式版 PKG](https://github.com/AlanSune/Cellmori/releases/latest) · [English](README.en.md) · [使用指南](docs/USAGE.md) · [反馈问题](https://github.com/AlanSune/Cellmori/issues)
 
@@ -30,15 +30,15 @@
 | 想及时升级 | 应用内检查正式版、查看说明、下载校验包并打开系统安装器 |
 | 不想反复输入密码 | 安装后台时授权，日常控制通过校验身份的 XPC 执行 |
 
-最新正式版为 **0.6.9**（build 36）。本次加入可调的恢复充电点、更新菜单栏小窗，并移除适配器兼容限充。M1/macOS 15.8.3 上已实测主界面和小窗的拖动、应用与固件读回。详见[验证记录](docs/VALIDATION.md)。采用 [MIT 许可证](LICENSE)，没有第三方包依赖。原生 SwiftUI / AppKit 界面，本地处理电池数据，无账户、无内置遥测上传；仅检查或下载更新时连接 GitHub。
+最新正式版为 **0.6.10**（build 42）。本版更新主界面和菜单栏小窗，加入独立外观设置、充电范围整体拖动、撤销修改和安装授权指引。已在 Apple M1 / macOS 15.8.3 上通过测试。采用 [MIT 许可证](LICENSE)，没有第三方包依赖。原生 SwiftUI / AppKit 界面，本地处理电池数据，无账户、无内置遥测上传；仅检查或下载更新时连接 GitHub。
 
 **macOS 26 已有 MacBook Pro（M4）用户实机验证。** 用户报告在 0.6.0 系列中“全部功能”均已验证可用；芯片为 M4；未提供系统小版本或逐项日志。这是该设备上的使用反馈，不表示所有 Mac 与固件均保证兼容。详见[兼容性与验证范围](docs/COMPATIBILITY.md)。
 
 ## 功能预览
 
-当前版本使用原生 macOS 侧栏、系统强调色与材质小窗，支持浅色和深色外观。
+主窗口使用原生 macOS 侧栏，小窗固定布局，两处支持跟随系统、浅色和深色外观。
 
-以下图片来自 0.6.9，由应用真实 SwiftUI 视图离屏渲染，标有“演示数据”，不包含个人电池记录，也不是 macOS 26 的实机截图。
+以下图片来自 0.6.10，由应用真实 SwiftUI 视图离屏渲染，标有“演示数据”，不包含个人电池记录，也不是 macOS 26 的实机截图。
 
 ### 健康信息与趋势
 
@@ -54,20 +54,24 @@
 <tr><td width="50%"><img src="docs/images/menu-panel.png" alt="浅色菜单栏快捷面板"></td><td width="50%"><img src="docs/images/menu-panel-dark.png" alt="深色菜单栏快捷面板"></td></tr>
 </table>
 
+在「偏好设置 → 外观」可选择跟随系统、浅色或深色。主窗口和菜单栏小窗共用这一设置，应用会记住你的选择。
+
 ### 应用内检查更新
 
-在菜单栏小窗可直接检查正式版本，发现新版后点按版本提示查看详情。偏好设置和 Cellmori 应用菜单也提供检查入口。安装包通过 SHA-256 校验后，可点击“安装更新并退出”打开系统安装器，安装验证通过后自动重新打开应用。自动检查默认开启，每天最多检查一次；可随时关闭，不会自动下载或安装。
+在菜单栏小窗可直接检查正式版本，发现新版后点按版本提示查看详情。偏好设置和 Cellmori 应用菜单也提供检查入口。安装包通过 SHA-256 校验后，可点击「打开安装包」。如系统拦截，可从同一界面打开「隐私与安全性」。安装验证通过后，应用会自动重新打开。自动检查默认开启，每天最多检查一次；可随时关闭，不会自动下载或安装。
 
 ![偏好设置中的软件更新入口](docs/images/software-updates.png)
 
 ## 安装与开始使用
 
-1. 从 [Releases 下载最新 PKG](https://github.com/AlanSune/Cellmori/releases/latest)，退出正在运行的 Cellmori 后安装。
+1. 从 [Releases 下载最新 PKG](https://github.com/AlanSune/Cellmori/releases/latest)，打开安装包并按照 macOS 提示安装。
 2. 应用安装至 `/Applications/Cellmori.app`。后台组件默认勾选；取消后仍可只读监测。
 3. 打开“后台服务”，核对 `io.cellmori.helper` 与“已安装 · 运行正常”；可点击“验证免密码通信”。
-4. 新安装默认由 macOS 管理。设定上限后点击“应用上限”；安装不会自行启动放电、校准。
+4. 新安装默认由 macOS 管理。设定范围后点击「应用充电范围」；安装不会自行启动放电、校准。
 
 安装包面向 **Apple Silicon / macOS 15.x、26.x**。当前应用与后台使用 ad-hoc 本地签名及 Hardened Runtime，**PKG 未使用 Developer ID Installer 签名，也未公证**。GitHub 的“正式版”表示非预发布 Release，不代表 Apple 公证或全部机型认证。请勿关闭 SIP 或全局安全检查来运行。
+
+首次安装时，先尝试打开从官方 Releases 下载且校验过的 PKG。若 macOS 提示无法验证开发者，请关闭系统提示，打开「系统设置 → 隐私与安全性 → 安全性」，核对被拦截的是本次 Cellmori 安装包，再选择「仍要打开」。[Apple 安装指引](https://support.apple.com/zh-cn/102445)
 
 安装、更新和卸载后台需要管理员授权；日常配置无需逐次输入密码。由于本地签名绑定精确代码哈希，更新或自行重建应用后应同步更新后台绑定。
 
